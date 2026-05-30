@@ -53,7 +53,7 @@ export const TOOLS = [
   }},
   { type: 'function', function: {
     name: 'write_file',
-    description: 'Write content to a file (creates or overwrites). Prefer edit_file for targeted changes.',
+    description: 'Write content to a file (creates or overwrites). Prefer edit_file for targeted changes. For task-generated scripts, temp files, or working outputs — write to the host temp dir or home dir, NOT inside the ATHENA drive directory.',
     parameters: { type: 'object', properties: {
       path:    { type: 'string', description: 'File path.' },
       content: { type: 'string', description: 'Full file content.' },

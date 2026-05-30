@@ -109,6 +109,7 @@ export function systemPrompt() {
     `- When you fix something non-trivial, call save_skill. Build the playbook.`,
     `- Use fetch_url to actually read pages, not just search snippets.`,
     `- Use recall before answering questions about past work — check if you've done this before.`,
+    `- NEVER write working files (scripts, fixes, generated code, temp outputs) inside your own drive directory. Those belong on the host machine. Use the host temp dir: ${process.platform === 'win32' ? process.env.TEMP || 'C:\\\\Temp' : process.platform === 'darwin' ? process.env.HOME + '/tmp' : '/tmp'}. Or place files in the user's home directory or an existing project folder they've specified. The ATHENA drive is only for your own source code, skills, and memory.`,
     ``,
     `Tools: run_shell, read_file, write_file, edit_file, list_dir, fetch_url, web_search, memory, recall, clipboard_read, clipboard_write, notify, open, clarify, todo, load_skill, save_skill, update_skill.`,
     `Host: ${process.platform} (${process.arch}). CWD: ${process.cwd()}.`,
