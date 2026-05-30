@@ -6,8 +6,8 @@ if /I "%PROCESSOR_ARCHITECTURE%"=="ARM64" set "ARCH=win-arm64"
 set "NODE=%ROOT%runtime\%ARCH%\node.exe"
 if not exist "%NODE%" (
   echo.
-  echo   Portable Node not found at: %NODE%
-  echo   See README.md - drop the Windows Node build into runtime\%ARCH%\
+  echo   Node not found at: %NODE%
+  echo   Drop the Windows Node build into runtime\%ARCH%\
   echo.
   pause
   exit /b 1
