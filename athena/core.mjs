@@ -113,9 +113,12 @@ export async function turn(messages, emit, opts = {}) {
 
     // Destructive approval: background agents auto-approve (they run unattended)
     let batchApproved = AUTO || opts.isolated;
-    if (!batchApproved) {
+    if (!batchApproved && process.env.ATHENA_UI !== '1') {
       const destructive = calls.filter(({ call }) => DESTRUCTIVE.has(call.function.name));
       if (destructive.length) {
+        emit({ type: 'approval_request', calls: destructive.map(({ call, args }) => ({
+          name: call.function.name, preview: args.command || args.path || JSON.stringify(args).slice(0, 80),
+        }))});
         batchApproved = await cliApprove(destructive, emit);
       }
     }
