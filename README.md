@@ -59,7 +59,15 @@ machines you trust.)
 
 ## Roadmap
 - **Phase 1 ✅** portable launchers, chat, host tools (shell + file r/w), memory.
-- **Phase 2 ✅** richer tools — patch/diff edits, multi-step task runner, web fetch for live info.
-- **Phase 3 ✅** modular architecture, Claude + NVIDIA provider support, self-building skills, smarter memory.
+- **Phase 2 ✅** richer tools — patch/diff edits, multi-step task runner, web fetch for live info. GPT-5 tool use.
+- **Phase 3 ✅** full feature upgrade:
+  - **Multi-provider tool use** — Claude (Anthropic) can now call all tools, not just GPT
+  - **Full personality** — Athena is fully characterised as the goddess of wisdom with her own voice and style
+  - **Coloured terminal** — user input in red, Athena responses in green
+  - **Admin permission request** — on first run each session, Athena requests elevated host access once so she can work without interruption
+  - **Multi-agent system** — Athena can spawn sub-agents (e.g. a dedicated research agent) that work in parallel; each agent writes its findings to a shared file that Athena reads before every response
+  - **Smart memory management** — Athena decides what is worth keeping vs. discarding; she evaluates memory on every session rather than blindly accumulating
+  - **Self-building skills** — when Athena solves something non-trivial she saves it as a reusable skill; next time she hits the same problem she loads the skill and skips the hard path (e.g. pinning/unpinning Chrome windows in Windows taskbar)
+  - **Context compression** — after 28 messages the conversation is automatically compressed into a tight summary so nothing overloads and nothing relevant is lost
 - **Phase 4 ✅** semantic recall — embeddings stored on drive, cosine similarity search, auto-tagging.
-- **Phase 5:** multi-agent — Athena spawns sub-agents for parallel work, reviews reports, coordinates tasks.
+- **Phase 5:** multi-agent coordination upgrades — agent reporting pipeline, Athena as orchestrator reviewing parallel agent reports before synthesising a final response.
