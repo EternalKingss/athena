@@ -12,8 +12,7 @@ export const PATHS = {
   agentMem: join(ROOT, 'data', 'memory', 'athena.md'),
   userMem:  join(ROOT, 'data', 'memory', 'user.md'),
   summary:  join(ROOT, 'data', 'memory', 'summary.md'),
-  db:       join(ROOT, 'data', 'memory', 'athena.db'),
-  sessDir:  join(ROOT, 'data', 'sessions'),
+sessDir:  join(ROOT, 'data', 'sessions'),
   skills:   join(ROOT, 'skills'),
 };
 

@@ -12,6 +12,30 @@ import { saveAndSummarize } from './memory.mjs';
 
 const execAsync = promisify(exec);
 
+const MAX_BODY = 1 * 1024 * 1024; // 1 MB
+
+async function readBody(req, res) {
+  let body = '';
+  for await (const chunk of req) {
+    body += chunk;
+    if (body.length > MAX_BODY) {
+      res.writeHead(413, { 'Content-Type': 'application/json' });
+      res.end('{"error":"request too large"}');
+      req.destroy();
+      return null;
+    }
+  }
+  return body;
+}
+
+function parseJSON(body, res) {
+  try { return JSON.parse(body); } catch {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end('{"error":"invalid json"}');
+    return null;
+  }
+}
+
 export const sseClients = new Set();
 export function broadcast(event) {
   const data = 'data: ' + JSON.stringify(event) + '\n\n';
@@ -329,18 +353,25 @@ export async function serveUI(messages) {
       res.write(':\n\n'); sseClients.add(res); req.on('close', () => sseClients.delete(res)); return;
     }
     if (req.url === '/chat' && req.method === 'POST') {
-      let body = ''; for await (const chunk of req) body += chunk;
-      const { text } = JSON.parse(body);
+      const body = await readBody(req, res); if (body === null) return;
+      const data = parseJSON(body, res); if (data === null) return;
+      const { text } = data;
+      if (!text || typeof text !== 'string' || !text.trim()) {
+        res.writeHead(400, { 'Content-Type': 'application/json' }); res.end('{"error":"text required"}'); return;
+      }
       res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('{"ok":true}');
-      pushInput(text); return;
+      pushInput(text.trim()); return;
     }
     if (req.url === '/spawn' && req.method === 'POST') {
-      let body = ''; for await (const chunk of req) body += chunk;
-      const { name, goal } = JSON.parse(body);
+      const body = await readBody(req, res); if (body === null) return;
+      const data = parseJSON(body, res); if (data === null) return;
+      const { name, goal } = data;
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      if (!name || !goal) { res.end('{"error":"name and goal required"}'); return; }
+      if (!name || typeof name !== 'string' || !goal || typeof goal !== 'string') {
+        res.end('{"error":"name and goal required"}'); return;
+      }
       const { spawnAgent } = await getAgentFns();
-      const agentId = spawnAgent(name, goal, uiEmit);
+      const agentId = spawnAgent(name.trim(), goal.trim(), uiEmit);
       res.end(JSON.stringify({ agentId })); return;
     }
     if (req.url === '/agents' && req.method === 'GET') {
@@ -353,8 +384,9 @@ export async function serveUI(messages) {
       res.end(JSON.stringify({ groups: CURATED_MODELS, active: state.activeModel })); return;
     }
     if (req.url === '/model' && req.method === 'POST') {
-      let body = ''; for await (const chunk of req) body += chunk;
-      const { model } = JSON.parse(body); if (model) state.activeModel = model;
+      const body = await readBody(req, res); if (body === null) return;
+      const data = parseJSON(body, res); if (data === null) return;
+      const { model } = data; if (model) state.activeModel = model;
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ active: state.activeModel }));
       broadcast({ type: 'model_changed', model: state.activeModel }); return;

@@ -58,7 +58,13 @@ export async function turn(messages, emit, opts = {}) {
   const setAgentTodos = opts.isolated ? (t => { agentTodos = t; }) : setSessionTodos;
   const inputHandler  = opts.isolated ? _noopInput : _requestUserInput;
 
+  const MAX_TOOL_ITERATIONS = 50;
+  let toolIterations = 0;
   while (true) {
+    if (toolIterations >= MAX_TOOL_ITERATIONS) {
+      emit({ type: 'error', message: `Stopped after ${MAX_TOOL_ITERATIONS} tool iterations to prevent runaway loop.` });
+      emit({ type: 'done' }); return;
+    }
     let textContent = '';
     const toolCallMap = {};
     let hasTools = false;
@@ -96,6 +102,7 @@ export async function turn(messages, emit, opts = {}) {
     messages.push(msg);
 
     if (!msg.tool_calls?.length) { emit({ type: 'done' }); return; }
+    toolIterations++;
 
     // ---- Execute tool calls ----
     const calls = msg.tool_calls.map(call => {
@@ -106,12 +113,9 @@ export async function turn(messages, emit, opts = {}) {
 
     // Destructive approval: background agents auto-approve (they run unattended)
     let batchApproved = AUTO || opts.isolated;
-    if (!batchApproved && process.env.ATHENA_UI !== '1') {
+    if (!batchApproved) {
       const destructive = calls.filter(({ call }) => DESTRUCTIVE.has(call.function.name));
       if (destructive.length) {
-        emit({ type: 'approval_request', calls: destructive.map(({ call, args }) => ({
-          name: call.function.name, preview: args.command || args.path || JSON.stringify(args).slice(0, 80),
-        }))});
         batchApproved = await cliApprove(destructive, emit);
       }
     }

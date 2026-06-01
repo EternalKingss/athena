@@ -57,12 +57,11 @@ export async function handleMemoryTool(args) {
     const total = newEntries.join(DELIM).length;
     if (total > MEM_CHAR_LIMIT) return `Memory full (${total}/${MEM_CHAR_LIMIT}). Remove something first.`;
     await writeEntries(file, newEntries);
-    // Auto-embed the new fact (non-blocking, best-effort)
     embedAndStore({
       text: args.content.trim(),
       type: 'memory',
       tags: [...extractTags(args.content), args.target],
-    }).catch(() => {});
+    }).catch(e => console.error('[memory] embed failed:', e.message));
     return `Added. ${usageStr(newEntries)}`;
   }
 
@@ -72,12 +71,14 @@ export async function handleMemoryTool(args) {
     const idx = entries.findIndex(e => e === args.old.trim());
     if (idx === -1) return 'Entry not found — use exact text from memory read.';
     entries[idx] = args.content.trim();
+    const total = entries.join(DELIM).length;
+    if (total > MEM_CHAR_LIMIT) return `Memory full after replace (${total}/${MEM_CHAR_LIMIT}). Shorten the new content.`;
     await writeEntries(file, entries);
     embedAndStore({
       text: args.content.trim(),
       type: 'memory',
       tags: [...extractTags(args.content), args.target],
-    }).catch(() => {});
+    }).catch(e => console.error('[memory] embed failed:', e.message));
     return `Replaced. ${usageStr(entries)}`;
   }
 
@@ -135,6 +136,6 @@ export async function saveAndSummarize(messages) {
       text: `Session ${ts}: ${summary}`,
       type: 'session',
       tags,
-    }).catch(() => {});
-  } catch { /* non-fatal */ }
+    }).catch(e => console.error('[memory] session embed failed:', e.message));
+  } catch (e) { console.error('[memory] summarize failed:', e.message); }
 }
