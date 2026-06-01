@@ -6,7 +6,13 @@ data/memory/user.md
 data/memory/summary.md
 data/memory/*.db
 data/memory/*.bak.*
+data/memory/embeddings.jsonl
 data/sessions/*.jsonl
+
+# Logs and temp
+debug.log
+*.log
+*.bak
 
 # Node.js runtime binaries (~120MB each, download separately)
 runtime/linux-x64/

@@ -181,8 +181,10 @@ async function* claudeStream(messages, tools, base, key) {
   let buf = '';
 
   // Track tool use blocks being assembled
-  const toolBlocks = {}; // index → {id, name, input_json}
-  let blockIndex = -1;
+  // ev.index = content block index (counts text + tool blocks)
+  // toolCallIndex = position among tool-only blocks (what core.mjs expects as tc.index)
+  const toolBlocks = {}; // ev.index → {id, name, input_json, toolCallIndex}
+  let toolCallIndex = -1;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -201,12 +203,13 @@ async function* claudeStream(messages, tools, base, key) {
       try { ev = JSON.parse(raw); } catch { continue; }
 
       if (ev.type === 'content_block_start') {
-        blockIndex = ev.index;
         if (ev.content_block?.type === 'tool_use') {
-          toolBlocks[blockIndex] = {
-            id:         ev.content_block.id,
-            name:       ev.content_block.name,
-            input_json: '',
+          toolCallIndex++;
+          toolBlocks[ev.index] = {
+            id:            ev.content_block.id,
+            name:          ev.content_block.name,
+            input_json:    '',
+            toolCallIndex: toolCallIndex,
           };
         }
       }
@@ -230,7 +233,7 @@ async function* claudeStream(messages, tools, base, key) {
             choices: [{
               delta: {
                 tool_calls: [{
-                  index:    0,
+                  index:    block.toolCallIndex,  // position among tool calls (not content blocks)
                   id:       block.id,
                   type:     'function',
                   function: { name: block.name, arguments: block.input_json },

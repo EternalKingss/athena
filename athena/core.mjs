@@ -5,12 +5,18 @@ import { systemPrompt } from './personality.mjs';
 import { AUTO } from './config.mjs';
 
 // ---- Session state ----
+// These are scoped to the MAIN agent only.
+// Background agents get their own isolated todos (passed via turn() closure).
 let SESSION_TODOS = [];
 export let _requestUserInput = null; // set by CLI or UI runner
 
 export function setRequestUserInput(fn) { _requestUserInput = fn; }
 export function getSessionTodos() { return SESSION_TODOS; }
 export function setSessionTodos(t) { SESSION_TODOS = t; }
+
+// Background agents get a no-op clarify so they never block waiting for user input
+const _noopInput = async (question) => `(background agent — cannot ask user: ${question})`;
+
 
 // ---- Context compression ----
 const COMPRESS_AT        = 40;
@@ -41,9 +47,16 @@ export async function maybeCompress(messages, emit) {
 }
 
 // ---- Core turn loop ----
-export async function turn(messages, emit) {
+// opts.isolated = true → use private todos + no-op clarify (for background agents)
+export async function turn(messages, emit, opts = {}) {
   emit({ type: 'status', text: 'thinking' });
   await maybeCompress(messages, emit);
+
+  // Isolated agents get their own todo list and a no-op input handler
+  // so they never block or interfere with the main agent's state
+  let agentTodos = opts.isolated ? [] : SESSION_TODOS;
+  const setAgentTodos = opts.isolated ? (t => { agentTodos = t; }) : setSessionTodos;
+  const inputHandler  = opts.isolated ? _noopInput : _requestUserInput;
 
   while (true) {
     let textContent = '';
@@ -91,15 +104,14 @@ export async function turn(messages, emit) {
       return { call, args };
     });
 
-    // CLI batch approval
-    let batchApproved = AUTO;
-    if (!AUTO && process.env.ATHENA_UI !== '1') {
+    // Destructive approval: background agents auto-approve (they run unattended)
+    let batchApproved = AUTO || opts.isolated;
+    if (!batchApproved && process.env.ATHENA_UI !== '1') {
       const destructive = calls.filter(({ call }) => DESTRUCTIVE.has(call.function.name));
       if (destructive.length) {
         emit({ type: 'approval_request', calls: destructive.map(({ call, args }) => ({
           name: call.function.name, preview: args.command || args.path || JSON.stringify(args).slice(0, 80),
         }))});
-        // In CLI mode this is handled by the approval prompt — set batchApproved via the flow
         batchApproved = await cliApprove(destructive, emit);
       }
     }
@@ -113,7 +125,7 @@ export async function turn(messages, emit) {
         result = await runTool(
           call.function.name, args,
           batchApproved || !isDestructive,
-          SESSION_TODOS, setSessionTodos, _requestUserInput
+          agentTodos, setAgentTodos, inputHandler
         );
       } catch (e) {
         result = `Error: ${e.message}`;

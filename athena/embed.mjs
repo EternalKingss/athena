@@ -115,6 +115,10 @@ export async function handleRecallTool(args) {
 
   if (!query) return 'query is required.';
 
+  // Recall requires an OpenAI key for embeddings — fail clearly if missing
+  const { API_KEY } = await import('./config.mjs');
+  if (!API_KEY) return 'Recall requires an OpenAI API key for embeddings. Add OPENAI_API_KEY to config/.env.';
+
   const results = await searchSimilar(query, topK, type);
   if (!results.length) return 'No relevant memories found.';
 

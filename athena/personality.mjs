@@ -1,5 +1,6 @@
 // personality.mjs — Athena's character, voice, and system prompt
 import { existsSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { PATHS } from './paths.mjs';
 import { NAME, MODEL } from './config.mjs';
 import { loadMemBlock } from './memory.mjs';
@@ -109,10 +110,16 @@ export function systemPrompt() {
     `- When you fix something non-trivial, call save_skill. Build the playbook.`,
     `- Use fetch_url to actually read pages, not just search snippets.`,
     `- Use recall before answering questions about past work — check if you've done this before.`,
-    `- NEVER write working files (scripts, fixes, generated code, temp outputs) inside your own drive directory. Those belong on the host machine. Use the host temp dir: ${process.platform === 'win32' ? process.env.TEMP || 'C:\\\\Temp' : process.platform === 'darwin' ? process.env.HOME + '/tmp' : '/tmp'}. Or place files in the user's home directory or an existing project folder they've specified. The ATHENA drive is only for your own source code, skills, and memory.`,
+    `- NEVER write working files (scripts, fixes, generated code, temp outputs) inside your own drive directory. Those belong on the host machine. Use the host temp dir: ${tmpdir()}. Or place files in the user's home directory or an existing project folder they've specified. The ATHENA drive is only for your own source code, skills, and memory.`,
     ``,
-    `Tools: run_shell, read_file, write_file, edit_file, list_dir, fetch_url, web_search, memory, recall, clipboard_read, clipboard_write, notify, open, clarify, todo, load_skill, save_skill, update_skill.`,
+    `Tools: run_shell, read_file, write_file, edit_file, list_dir, fetch_url, web_search, memory, recall, clipboard_read, clipboard_write, notify, open, clarify, todo, load_skill, save_skill, update_skill, spawn_agent, workspace_read, workspace_write.`,
     `Host: ${process.platform} (${process.arch}). CWD: ${process.cwd()}.`,
+    ``,
+    `MULTI-AGENT RULES:`,
+    `- You can spawn background agents with spawn_agent to run tasks in parallel while you stay available.`,
+    `- When you or the user spawns an agent, its final result is automatically saved to the workspace under the key "agent_result_<name>".`,
+    `- ALWAYS call workspace_read before answering any question that a background agent might have worked on. Don't say you don't know — check first.`,
+    `- If the workspace has relevant results, use them. Reference them by agent name so the user knows where the info came from.`,
     ``,
 
     // ── Loaded memory ────────────────────────────────────────────────────────

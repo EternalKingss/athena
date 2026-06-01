@@ -12,29 +12,46 @@ import { systemPrompt } from './personality.mjs';
 import { saveAndSummarize } from './memory.mjs';
 import { turn, runTask, setRequestUserInput, freshMessages } from './core.mjs';
 import { serveUI, uiEmit } from './ui.mjs';
+import { setAgentFunctions } from './tools.mjs';
+import { spawnAgent, listAgents, workspaceRead, workspaceWrite } from './agents.mjs';
 
 const UI_MODE = process.argv.includes('--ui');
+
+// ---- Wire agent functions into tools (breaks circular dependency) ----
+// globalEmit is set per-mode below, so we wrap lazily via the closure.
+let _globalEmit = null;
+setAgentFunctions({
+  spawnAgent: (name, goal) => spawnAgent(name, goal, ev => _globalEmit?.(ev)),
+  listAgents,
+  workspaceRead,
+  workspaceWrite,
+});
 
 // ---- Terminal helpers (CLI only) ----
 const bold = s => `\x1b[1m${s}\x1b[0m`;
 const dim  = s => `\x1b[2m${s}\x1b[0m`;
+const cyan = s => `\x1b[36m${s}\x1b[0m`;
 
 // ---- CLI emit ----
 function cliEmit(event) {
-  if (event.type === 'token')   process.stdout.write(event.content);
+  const prefix = event.agentName ? dim(`  [${event.agentName}] `) : '';
+  if (event.type === 'token')        process.stdout.write(event.content);
   if (event.type === 'stream_start') process.stdout.write('\n');
   if (event.type === 'stream_end')   process.stdout.write('\n');
-  if (event.type === 'tool_start')   process.stdout.write(dim(`\n  [${event.name}] ${JSON.stringify(event.args||{}).slice(0,80)}…\n`));
-  if (event.type === 'tool_result')  process.stdout.write(dim(`  → ${String(event.result||'').split('\n')[0].slice(0,100)}\n`));
-  if (event.type === 'system')       process.stdout.write(dim(`\n  ${event.text}\n`));
-  if (event.type === 'done')         process.stdout.write('\n');
+  if (event.type === 'tool_start')   process.stdout.write(dim(`\n${prefix}[${event.name}] ${JSON.stringify(event.args||{}).slice(0,80)}…\n`));
+  if (event.type === 'tool_result')  process.stdout.write(dim(`${prefix}→ ${String(event.result||'').split('\n')[0].slice(0,100)}\n`));
+  if (event.type === 'system')       process.stdout.write(dim(`\n${prefix}${event.text}\n`));
+  if (event.type === 'agent_done')   process.stdout.write(cyan(`\n  ✓ Agent "${event.agentName}" finished (${event.status})\n`));
+  if (event.type === 'done' && !event.agentId) process.stdout.write('\n');
 }
 
 // ---- CLI runner ----
 async function runCLI() {
   console.clear();
   console.log(bold(`\n  ${NAME}`) + dim(`  ·  ${state.activeModel}  ·  ${process.platform}/${process.arch}`));
-  console.log(dim(`  /exit  /task <goal>  /model [name]  /mem  /forget  /help\n`));
+  console.log(dim(`  /exit  /task <goal>  /spawn <name> <goal>  /agents  /model [name]  /mem  /forget  /help\n`));
+
+  _globalEmit = cliEmit;
 
   const messages = freshMessages();
   const rl  = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -65,29 +82,69 @@ async function runCLI() {
     if (!input) continue;
 
     if (input === '/exit' || input === '/quit') { await close(); break; }
+
     if (input === '/help') {
-      console.log(dim('\n  /task <goal>   autonomous multi-step task\n  /model [name]  show or switch active model\n  /mem           show long-term memory\n  /forget        clear current context\n  /exit          save session + quit\n'));
+      console.log(dim([
+        '',
+        '  /task <goal>          autonomous multi-step task',
+        '  /spawn <name> <goal>  spawn a background agent in parallel',
+        '  /agents               list all running/done agents',
+        '  /model [name]         show or switch active model',
+        '  /mem                  show long-term memory',
+        '  /forget               clear current context',
+        '  /exit                 save session + quit',
+        '',
+      ].join('\n')));
       continue;
     }
+
     if (input === '/mem') {
       console.log('\n' + (existsSync(PATHS.agentMem) ? readFileSync(PATHS.agentMem, 'utf8') : '(empty)') + '\n');
       continue;
     }
+
     if (input === '/forget') {
       messages.length = 0;
       messages.push({ role: 'system', content: systemPrompt() });
       console.log(dim('  context cleared\n')); continue;
     }
+
     if (input.startsWith('/model')) {
       const m = input.slice(6).trim();
       if (!m) { console.log(dim(`  active: ${state.activeModel}\n`)); continue; }
       state.activeModel = m;
       console.log(dim(`  switched to ${state.activeModel}\n`)); continue;
     }
+
     if (input.startsWith('/task ')) {
       const goal = input.slice(6).trim();
       if (!goal) { console.log(dim('  usage: /task <goal>\n')); continue; }
       try { await runTask(goal, messages, cliEmit); } catch (e) { console.log(`\n  error: ${e.message}\n`); }
+      continue;
+    }
+
+    // /spawn <name> <rest-of-line-is-goal>
+    if (input.startsWith('/spawn ')) {
+      const rest = input.slice(7).trim();
+      const spaceIdx = rest.indexOf(' ');
+      if (spaceIdx === -1) { console.log(dim('  usage: /spawn <name> <goal>\n')); continue; }
+      const name = rest.slice(0, spaceIdx).trim();
+      const goal = rest.slice(spaceIdx + 1).trim();
+      const id = spawnAgent(name, goal, cliEmit);
+      console.log(cyan(`  Agent "${name}" spawned (${id}) — running in background\n`));
+      continue;
+    }
+
+    // /agents — list pool
+    if (input === '/agents') {
+      const agents = listAgents();
+      if (!agents.length) { console.log(dim('  no agents running\n')); continue; }
+      console.log('');
+      for (const a of agents) {
+        const icon = a.status === 'running' ? '⟳' : a.status === 'done' ? '✓' : '✗';
+        console.log(`  ${icon} ${bold(a.name)} (${a.id})  ${dim(a.status)}  ${dim(a.goal.slice(0, 60))}`);
+      }
+      console.log('');
       continue;
     }
 
@@ -98,6 +155,7 @@ async function runCLI() {
 
 // ---- Entry point ----
 if (UI_MODE) {
+  _globalEmit = uiEmit;
   const messages = freshMessages();
   process.on('SIGINT', async () => { await saveAndSummarize(messages); process.exit(0); });
   await serveUI(messages);
