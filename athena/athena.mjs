@@ -26,7 +26,6 @@ const PATHS = {
   memDir:  join(ROOT, 'data', 'memory'),
   agentMem: join(ROOT, 'data', 'memory', 'athena.md'),   // env facts, tool quirks, conventions
   userMem:  join(ROOT, 'data', 'memory', 'user.md'),      // who the user is, preferences, habits
-  longMem:  join(ROOT, 'data', 'memory', 'athena.md'),    // alias kept for backward compat
   summary:  join(ROOT, 'data', 'memory', 'summary.md'),
   db:       join(ROOT, 'data', 'memory', 'athena.db'),
   sessDir:  join(ROOT, 'data', 'sessions'),
@@ -108,10 +107,12 @@ function parseFrontmatter(src) {
   return meta;
 }
 
+let _skillsCache = null;
 function scanSkills() {
-  if (!existsSync(PATHS.skills)) return [];
+  if (_skillsCache) return _skillsCache;
+  if (!existsSync(PATHS.skills)) return (_skillsCache = []);
   try {
-    return readdirSync(PATHS.skills)
+    _skillsCache = readdirSync(PATHS.skills)
       .filter(f => statSync(join(PATHS.skills, f)).isDirectory())
       .map(dir => {
         const file = join(PATHS.skills, dir, 'SKILL.md');
@@ -126,7 +127,8 @@ function scanSkills() {
         return { dir, name: (meta.name || dir).trim(), desc: (meta.description || '').trim() };
       })
       .filter(Boolean);
-  } catch { return []; }
+    return _skillsCache;
+  } catch { return (_skillsCache = []); }
 }
 const UI_MODE   = process.argv.includes('--ui');
 
@@ -427,7 +429,7 @@ async function runTool(name, args, preApproved = false) {
       const count = original.split(args.old_str).length - 1;
       if (count === 0) return `edit_file error: old_str not found in ${target}`;
       if (count > 1)   return `edit_file error: old_str appears ${count} times — make it more unique`;
-      await writeFile(target, original.replace(args.old_str, args.new_str));
+      await writeFile(target, original.replace(args.old_str, () => args.new_str));
       return `Edited ${target}`;
     }
 
@@ -502,9 +504,13 @@ async function runTool(name, args, preApproved = false) {
         const entries = readEntries();
         const idx = entries.findIndex(e => e.includes(args.old_text.trim()));
         if (idx === -1) return `No entry matched "${args.old_text}".`;
-        entries[idx] = args.content.trim();
-        await writeEntries(entries);
-        return `Replaced in [${args.target}]. ${usage(entries)}`;
+        const next = [...entries];
+        next[idx] = args.content.trim();
+        const chars = next.join(DELIM).length;
+        if (chars > MEM_CHAR_LIMIT)
+          return `Memory full (${chars}/${MEM_CHAR_LIMIT} chars). Remove an entry first.`;
+        await writeEntries(next);
+        return `Replaced in [${args.target}]. ${usage(next)}`;
       }
 
       if (args.action === 'remove') {
@@ -631,21 +637,23 @@ else { Remove-Item $tmp -ErrorAction SilentlyContinue; "Tesseract not found. Ins
     }
 
     if (name === 'win_app_open') {
+      const safeName = args.name.replace(/[^a-zA-Z0-9 \-_.]/g, '').slice(0, 100);
       return await runPS(`
-try { Start-Process "${args.name.replace(/"/g, '')}"; "Opened ${args.name}" }
+try { Start-Process "${safeName}"; "Opened ${safeName}" }
 catch {
-  $found=@("$env:ProgramFiles","${`$env:ProgramFiles(x86)`}","$env:LOCALAPPDATA\\Programs") |
-    ForEach-Object { Get-ChildItem -Path $_ -Filter "*${args.name.replace(/"/g, '')}*.exe" -Recurse -ErrorAction SilentlyContinue } |
+  $found=@("$env:ProgramFiles","$env:ProgramFiles(x86)","$env:LOCALAPPDATA\\Programs") |
+    ForEach-Object { Get-ChildItem -Path $_ -Filter "*${safeName}*.exe" -Recurse -ErrorAction SilentlyContinue } |
     Select-Object -First 1
-  if($found){ Start-Process $found.FullName; "Opened $($found.FullName)" } else { "Could not find ${args.name}" }
+  if($found){ Start-Process $found.FullName; "Opened $($found.FullName)" } else { "Could not find ${safeName}" }
 }
 `);
     }
 
     if (name === 'win_app_close') {
+      const safeName = args.name.replace(/[^a-zA-Z0-9 \-_.]/g, '').slice(0, 100);
       return await runPS(`
-$p=Get-Process|Where-Object{$_.ProcessName -like "*${args.name.replace(/"/g, '')}*" -or $_.MainWindowTitle -like "*${args.name.replace(/"/g, '')}*"}
-if($p){ $p|Stop-Process -Force; "Closed $($p.Count) process(es)" } else { "No matching process found for '${args.name}'" }
+$p=Get-Process|Where-Object{$_.ProcessName -like "*${safeName}*" -or $_.MainWindowTitle -like "*${safeName}*"}
+if($p){ $p|Stop-Process -Force; "Closed $($p.Count) process(es)" } else { "No matching process found for '${safeName}'" }
 `);
     }
 
@@ -656,13 +664,14 @@ Get-Process|Where-Object{$_.MainWindowTitle}|Sort-Object ProcessName|Select-Obje
     }
 
     if (name === 'win_app_switch') {
+      const safeName = args.name.replace(/[^a-zA-Z0-9 \-_.]/g, '').slice(0, 100);
       return await runPS(`
 Add-Type @'
 using System; using System.Runtime.InteropServices;
 public class W { [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h); [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h,int n); }
 '@
-$p=Get-Process|Where-Object{$_.MainWindowTitle -like "*${args.name.replace(/"/g, '')}*"}|Select-Object -First 1
-if($p){ [W]::ShowWindow($p.MainWindowHandle,9); [W]::SetForegroundWindow($p.MainWindowHandle); "Switched to: $($p.MainWindowTitle)" } else { "No window matching '${args.name}' found" }
+$p=Get-Process|Where-Object{$_.MainWindowTitle -like "*${safeName}*"}|Select-Object -First 1
+if($p){ [W]::ShowWindow($p.MainWindowHandle,9); [W]::SetForegroundWindow($p.MainWindowHandle); "Switched to: $($p.MainWindowTitle)" } else { "No window matching '${safeName}' found" }
 `);
     }
 
@@ -715,6 +724,7 @@ async function chat(messages) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
     body: JSON.stringify({ model: ACTIVE_MODEL, messages }),
+    signal: AbortSignal.timeout(30000),
   });
   if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
   return (await res.json()).choices[0].message;
@@ -959,7 +969,7 @@ function cliEmit(ev) {
     else if (name === 'fetch_url')    console.log(`  ${dim('fetch')} ${args.url}`);
     else if (name === 'write_file')   console.log(`  ${dim('write')} ${args.path}`);
     else if (name === 'edit_file')    console.log(`  ${dim('edit')}  ${args.path}`);
-    else if (name === 'remember')     console.log(`  ${dim('remember')} ${args.fact}`);
+    else if (name === 'memory')        console.log(`  ${dim('memory')}  [${args.action}] ${args.target}`);
     else if (name === 'recall')       console.log(`  ${dim('recall')} ${args.query}`);
     else if (name === 'notify')       console.log(`  ${dim('notify')} ${args.title}`);
     else if (name === 'open')         console.log(`  ${dim('open')} ${args.target}`);
@@ -1217,12 +1227,12 @@ function addToolItem(block, name, args, result) {
   item.className = 'tool-item';
   const cmd = document.createElement('div');
   cmd.className = 'tool-cmd';
-  const icons = {run_shell:'$',web_search:'⌕',fetch_url:'↗',read_file:'📄',write_file:'✎',edit_file:'✎',remember:'◉',recall:'⌕',clipboard_read:'📋',clipboard_write:'📋',notify:'🔔',open:'↗',list_dir:'📁'};
+  const icons = {run_shell:'$',web_search:'⌕',fetch_url:'↗',read_file:'📄',write_file:'✎',edit_file:'✎',memory:'◉',recall:'⌕',clipboard_read:'📋',clipboard_write:'📋',notify:'🔔',open:'↗',list_dir:'📁'};
   const icon = icons[name] || '·';
   const label = name === 'run_shell' ? args.command
               : name === 'web_search' ? args.query
               : name === 'fetch_url' ? args.url
-              : name === 'remember' ? args.fact
+              : name === 'memory' ? '[' + args.action + '] ' + args.target
               : name === 'recall' ? args.query
               : args.path || args.target || name;
   cmd.textContent = icon + ' ' + label;
@@ -1386,7 +1396,10 @@ async function openMem() {
   for (const m of data) {
     const item = document.createElement('div');
     item.className = 'mem-item';
-    item.innerHTML = \`<div class="mem-type">\${m.type}</div><div class="mem-text">\${m.content}</div><div class="mem-date">\${new Date(m.created_at).toLocaleDateString()}</div>\`;
+    const mt = document.createElement('div'); mt.className = 'mem-type'; mt.textContent = m.type;
+    const mc = document.createElement('div'); mc.className = 'mem-text'; mc.textContent = m.content;
+    const md = document.createElement('div'); md.className = 'mem-date'; md.textContent = new Date(m.created_at).toLocaleDateString();
+    item.appendChild(mt); item.appendChild(mc); item.appendChild(md);
     el.appendChild(item);
   }
 }
@@ -1455,7 +1468,10 @@ async function serveUI(messages) {
     }
     if (req.url === '/chat' && req.method === 'POST') {
       let body = '';
-      for await (const chunk of req) body += chunk;
+      for await (const chunk of req) {
+        body += chunk;
+        if (body.length > 65536) { res.writeHead(413); res.end(); return; }
+      }
       const { text } = JSON.parse(body);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end('{"ok":true}');
@@ -1475,7 +1491,10 @@ async function serveUI(messages) {
     }
     if (req.url === '/model' && req.method === 'POST') {
       let body = '';
-      for await (const chunk of req) body += chunk;
+      for await (const chunk of req) {
+        body += chunk;
+        if (body.length > 65536) { res.writeHead(413); res.end(); return; }
+      }
       const { model } = JSON.parse(body);
       if (model) ACTIVE_MODEL = model;
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1526,7 +1545,7 @@ async function serveUI(messages) {
       continue;
     }
     if (input === '/mem') {
-      const longMem = existsSync(PATHS.longMem) ? readFileSync(PATHS.longMem, 'utf8') : '(empty)';
+      const longMem = existsSync(PATHS.agentMem) ? readFileSync(PATHS.agentMem, 'utf8') : '(empty)';
       broadcast({ type: 'message', role: 'assistant', content: longMem });
       broadcast({ type: 'done' });
       continue;
@@ -1586,7 +1605,7 @@ async function runCLI() {
       continue;
     }
     if (input === '/mem') {
-      console.log('\n' + (existsSync(PATHS.longMem) ? readFileSync(PATHS.longMem, 'utf8') : '(empty)') + '\n');
+      console.log('\n' + (existsSync(PATHS.agentMem) ? readFileSync(PATHS.agentMem, 'utf8') : '(empty)') + '\n');
       continue;
     }
     if (input === '/forget') {
