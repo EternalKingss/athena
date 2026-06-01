@@ -52,14 +52,14 @@ machines you trust.)
 
 ## Security — read this
 - Your API key sits in plaintext in `config/.env`. If you lose the drive or plug into
-  a compromised machine, treat the key as burned and rotate it. (Passphrase encryption
-  is a planned upgrade — Phase 3.)
+  a compromised machine, treat the key as burned and rotate it.
 - Do **not** plug this into locked-down or monitored machines (work, government,
   someone else's secured box). An agent running shell commands and phoning out to an
   API is exactly what those environments flag.
 
 ## Roadmap
-- **Phase 1 (this):** portable launchers, chat, host tools (shell + file r/w), memory.
-- **Phase 2:** richer tools — patch/diff edits, multi-step task runner, web fetch for live info.
-- **Phase 3:** passphrase-encrypted key, smarter rolling memory, session resume.
-- **Phase 4 (optional):** semantic recall (sqlite + embeddings on the drive).
+- **Phase 1 ✅** portable launchers, chat, host tools (shell + file r/w), memory.
+- **Phase 2 ✅** richer tools — patch/diff edits, multi-step task runner, web fetch for live info.
+- **Phase 3 ✅** modular architecture, Claude + NVIDIA provider support, self-building skills, smarter memory.
+- **Phase 4 ✅** semantic recall — embeddings stored on drive, cosine similarity search, auto-tagging.
+- **Phase 5:** multi-agent — Athena spawns sub-agents for parallel work, reviews reports, coordinates tasks.
