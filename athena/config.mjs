@@ -53,3 +53,9 @@ export const CURATED_MODELS = [
 ];
 
 export const MEM_CHAR_LIMIT = 2200;
+
+// Warn at startup if no provider has a key configured
+const _hasKey = API_KEY || ANTHROPIC_KEY || NVIDIA_KEY;
+if (!_hasKey) {
+  console.warn('\n[athena] WARNING: No API key found. Set OPENAI_API_KEY, ANTHROPIC_API_KEY, or NVIDIA_API_KEY in config/.env\n');
+}
