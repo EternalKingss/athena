@@ -10,7 +10,7 @@ import { NAME, MODEL, state } from './config.mjs';
 import { PATHS } from './paths.mjs';
 import { systemPrompt } from './personality.mjs';
 import { saveAndSummarize } from './memory.mjs';
-import { turn, runTask, setRequestUserInput, freshMessages } from './core.mjs';
+import { turn, runTask, setRequestUserInput, freshMessages, setInterrupt, isActive } from './core.mjs';
 import { serveUI, uiEmit } from './ui.mjs';
 import { setAgentFunctions } from './tools.mjs';
 import { spawnAgent, listAgents, workspaceRead, workspaceWrite } from './agents.mjs';
@@ -66,7 +66,14 @@ async function runCLI() {
     rl.close();
     process.exit(0);
   };
-  process.on('SIGINT', close);
+  process.on('SIGINT', () => {
+    if (isActive()) {
+      setInterrupt();
+      process.stdout.write(dim('\n  [interrupted — generating summary…]\n'));
+    } else {
+      close();
+    }
+  });
 
   setRequestUserInput(async (question, choices) => {
     console.log(`\n  ${bold('?')} ${question}`);
@@ -84,6 +91,16 @@ async function runCLI() {
 
     if (input === '/exit' || input === '/quit') { await close(); break; }
 
+    if (input === '/stop') {
+      if (isActive()) {
+        setInterrupt();
+        console.log(dim('  [interrupting — will summarise when current tool finishes]\n'));
+      } else {
+        console.log(dim('  nothing running\n'));
+      }
+      continue;
+    }
+
     if (input === '/help') {
       console.log(dim([
         '',
@@ -93,6 +110,7 @@ async function runCLI() {
         '  /model [name]         show or switch active model',
         '  /mem                  show long-term memory',
         '  /forget               clear current context',
+        '  /stop                 interrupt current task, get summary',
         '  /exit                 save session + quit',
         '',
       ].join('\n')));

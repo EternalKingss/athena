@@ -1,6 +1,6 @@
 // personality.mjs — Athena's character, voice, and system prompt
 import { existsSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { tmpdir, homedir } from 'node:os';
 import { PATHS } from './paths.mjs';
 import { NAME, MODEL } from './config.mjs';
 import { loadMemBlock } from './memory.mjs';
@@ -114,7 +114,7 @@ export function systemPrompt() {
     `- NEVER write working files (scripts, fixes, generated code, temp outputs) inside your own drive directory. Those belong on the host machine. Use the host temp dir: ${tmpdir()}. Or place files in the user's home directory or an existing project folder they've specified. The ATHENA drive is only for your own source code, skills, and memory.`,
     ``,
     `Tools: run_shell, read_file, write_file, edit_file, list_dir, fetch_url, web_search, memory, recall, clipboard_read, clipboard_write, notify, open, clarify, todo, load_skill, save_skill, update_skill, spawn_agent, workspace_read, workspace_write, machine_info.`,
-    `Host: ${process.platform} (${process.arch}). CWD: ${process.cwd()}.`,
+    `Host: ${process.platform} (${process.arch}). CWD: ${process.cwd().replace(homedir(), '~')}.`,
     capabilitiesSummary() || '',
     ``,
     `MULTI-AGENT RULES:`,

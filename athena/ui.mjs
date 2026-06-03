@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import { NAME, MODEL, CURATED_MODELS, state } from './config.mjs';
 import { PATHS } from './paths.mjs';
 import { systemPrompt } from './personality.mjs';
-import { turn, runTask, setRequestUserInput } from './core.mjs';
+import { turn, runTask, setRequestUserInput, setInterrupt } from './core.mjs';
 import { saveAndSummarize, readEntries } from './memory.mjs';
 
 const execAsync = promisify(exec);
@@ -140,6 +140,9 @@ function buildHTML(agentName) {
     '#send{background:transparent;border:1px solid var(--green-dim);color:var(--green);padding:10px 18px;border-radius:6px;cursor:pointer;font-family:inherit;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}',
     '#send:hover{background:var(--green-glow)}',
     '#send:disabled{opacity:.3;cursor:default}',
+    '#stop-btn{display:none;background:transparent;border:1px solid var(--red-dim);color:var(--red);padding:10px 14px;border-radius:6px;cursor:pointer;font-family:inherit;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}',
+    '#stop-btn:hover{background:var(--red-glow)}',
+    '#stop-btn.visible{display:block}',
     '#mem-panel{position:fixed;right:0;top:0;height:100%;width:320px;background:var(--surface);border-left:1px solid var(--border);display:flex;flex-direction:column;transform:translateX(100%);transition:transform .25s;z-index:100}',
     '#mem-panel.open{transform:translateX(0)}',
     '#mem-panel-header{display:flex;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--border)}',
@@ -173,6 +176,7 @@ function buildHTML(agentName) {
     '    <div id="input-wrap"><span id="input-prefix">&gt;</span>',
     '      <textarea id="input" rows="1" placeholder="/task, /spawn &lt;name&gt; &lt;goal&gt;, /mem, /forget, /model ..." onkeydown="onKey(event)" oninput="resize(this)"></textarea>',
     '    </div>',
+    '    <button id="stop-btn" onclick="stopTask()">&#9632; Stop</button>',
     '    <button id="send" onclick="sendMsg()">Send &#8594;</button>',
     '  </div>',
     '</div>',
@@ -198,6 +202,7 @@ function buildScript(agentName) {
     'const messagesWrap=document.getElementById("messages");',
     'const input=document.getElementById("input");',
     'const sendBtn=document.getElementById("send");',
+    'const stopBtn=document.getElementById("stop-btn");',
     'const dot=document.getElementById("status-dot");',
     'const tabsEl=document.getElementById("agent-tabs");',
     'const spawnBtn=document.getElementById("spawn-btn");',
@@ -251,7 +256,7 @@ function buildScript(agentName) {
     '  const id=ev.agentId||"main";',
     '  if(id!=="main"&&!agentState[id])getOrCreateAgent(id,ev.agentName||id);',
     '  const s=agentState[id];if(!s)return;',
-    '  if(ev.type==="status"){s.busy=true;s.currentTools=null;s.streamBubble=null;if(id===activeAgentId)dot.className="thinking";if(id==="main")sendBtn.disabled=true;}',
+    '  if(ev.type==="status"){s.busy=true;s.currentTools=null;s.streamBubble=null;if(id===activeAgentId)dot.className="thinking";if(id==="main"){sendBtn.disabled=true;stopBtn.classList.add("visible");}}',
     '  if(ev.type==="stream_start"){',
     '    s.currentTools=null;',
     '    const wrap=document.createElement("div");wrap.className="msg assistant";',
@@ -261,7 +266,7 @@ function buildScript(agentName) {
     '  }',
     '  if(ev.type==="token"&&s.streamBubble){s.streamBubble.textContent+=ev.content;scroll(id);}',
     '  if(ev.type==="stream_end"){s.streamBubble=null;}',
-    '  if(ev.type==="done"&&!ev.agentId){s.busy=false;if(id===activeAgentId)dot.className="";if(id==="main")sendBtn.disabled=false;}',
+    '  if(ev.type==="done"&&!ev.agentId){s.busy=false;if(id===activeAgentId)dot.className="";if(id==="main"){sendBtn.disabled=false;stopBtn.classList.remove("visible");}}',
     '  if(ev.type==="agent_done"){',
     '    const ds=agentState[ev.agentId];if(ds){ds.busy=false;if(ds.tab){ds.tab.classList.remove("running");ds.tab.classList.add(ev.status==="done"?"done":"error");}}',
     '    if(ev.agentId===activeAgentId)dot.className="";',
@@ -304,6 +309,7 @@ function buildScript(agentName) {
     'function closeSpawn(){document.getElementById("spawn-modal").classList.remove("open");document.getElementById("spawn-name").value="";document.getElementById("spawn-goal").value="";}',
     'async function doSpawn(){const name=document.getElementById("spawn-name").value.trim();const goal=document.getElementById("spawn-goal").value.trim();if(!name||!goal)return;closeSpawn();await fetch("/spawn",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name,goal})});}',
     'document.getElementById("spawn-modal").addEventListener("click",e=>{if(e.target===document.getElementById("spawn-modal"))closeSpawn();});',
+    'async function stopTask(){await fetch("/stop",{method:"POST"});stopBtn.classList.remove("visible");addMsg("main","sys","Interrupted — summarising...");}',
     'async function sendMsg(){const text=input.value.trim();if(!text||sendBtn.disabled)return;addMsg("main","user",text);input.value="";resize(input);sendBtn.disabled=true;dot.className="thinking";agentState.main.currentTools=null;await fetch("/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text})});}',
     'function onKey(e){if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendMsg();}}',
     'function resize(el){el.style.height="auto";el.style.height=Math.min(el.scrollHeight,160)+"px";}',
@@ -395,6 +401,10 @@ export async function serveUI(messages) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ active: state.activeModel }));
       broadcast({ type: 'model_changed', model: state.activeModel }); return;
+    }
+    if (req.url === '/stop' && req.method === 'POST') {
+      setInterrupt();
+      res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('{"ok":true}'); return;
     }
     if (req.url === '/clear' && req.method === 'POST') {
       resetMessages(messages);

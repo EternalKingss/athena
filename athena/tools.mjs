@@ -1,9 +1,11 @@
 // tools.mjs
 import { readFile, readdir, stat, writeFile } from 'node:fs/promises';
-import { resolve, join, isAbsolute } from 'node:path';
+import { existsSync } from 'node:fs';
+import { resolve, join, isAbsolute, delimiter } from 'node:path';
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { BRAVE_KEY, AUTO } from './config.mjs';
+import { PATHS } from './paths.mjs';
 import { handleMemoryTool } from './memory.mjs';
 import { loadSkill, saveSkill, updateSkill } from './skills.mjs';
 import { handleRecallTool } from './embed.mjs';
@@ -66,7 +68,13 @@ export async function runTool(name, args, preApproved, sessionTodos, setSessionT
 
   if (name === 'run_shell') {
     if (!ok) throw new Error('not approved');
-    const { stdout, stderr } = await execAsync(args.command, { timeout: 120000, maxBuffer: 1024 * 1024 * 10 });
+    // Prepend bundled Python bin dirs so drive Python/pip take priority over host
+    const env = { ...process.env };
+    if (existsSync(PATHS.python)) {
+      const extra = PATHS.pythonBin + delimiter + PATHS.pythonPkg;
+      env.PATH = extra + delimiter + (env.PATH || '');
+    }
+    const { stdout, stderr } = await execAsync(args.command, { timeout: 120000, maxBuffer: 1024 * 1024 * 10, env });
     return (stdout || '') + (stderr ? '\n[stderr]\n' + stderr : '') || '(no output)';
   }
 
