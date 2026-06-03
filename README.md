@@ -24,7 +24,7 @@ config/.env.example  →  copy to  config/.env
 ```
 Fill in at least one provider key. See `.env.example` for all options.
 
-### 2. Add portable Node (one per OS you'll use)
+### 2. Add portable runtimes (one per OS you'll use)
 Download Node 22 LTS from https://nodejs.org/dist/ and place it so the launcher finds it:
 
 | OS | Download | Path |
@@ -37,6 +37,32 @@ Download Node 22 LTS from https://nodejs.org/dist/ and place it so the launcher 
 | Linux ARM | `node-vXX-linux-arm64.tar.xz` | `runtime/linux-arm64/bin/node` |
 
 Windows users: `runtime/get-node.ps1` can download and extract it automatically.
+
+#### Optional: Portable Python (no host install)
+Athena can carry her own Python using [python-build-standalone](https://github.com/indygreg/python-build-standalone). Nothing touches the host.
+
+```bash
+# Linux / macOS
+bash runtime/get-python.sh
+
+# Windows
+powershell -ExecutionPolicy Bypass -File runtime\get-python.ps1
+```
+
+Drops into `runtime/<arch>/python/`. Any `python` or `pip` command Athena runs automatically uses the drive's Python first.
+
+#### Optional: Loki-RS malware scanner (no host install)
+Bundles the [Loki-RS](https://github.com/Neo23x0/Loki-RS) YARA + IOC scanner binary on the drive.
+
+```bash
+# Linux / macOS
+bash runtime/get-loki.sh
+
+# Windows
+powershell -ExecutionPolicy Bypass -File runtime\get-loki.ps1
+```
+
+Drops into `runtime/<arch>/loki-rs[.exe]`. Ask Athena to `load_skill loki-scan` for usage.
 
 You only need the platforms you plug into.
 
@@ -158,4 +184,4 @@ athena/
 | **3** | Rolling session summaries, session save/resume, smarter context management | ✓ done |
 | **4** | Modular architecture, multi-provider (Anthropic + NVIDIA), semantic recall + embeddings | ✓ done |
 | **5** | Multi-agent system, self-building skill library, full web UI, security hardening, tool output compression, codebase cleanup | ✓ done |
-| **6** | Machine capability detection — languages, compilers, GPUs, containers, browsers, IDEs, databases, MCP servers detected at boot and injected into system prompt | ✅ current |
+| **6** | Machine capability detection — languages, compilers, GPUs, containers, browsers, IDEs, databases, MCP servers detected at boot and injected into system prompt. Portable Python + Loki-RS malware scanner bundled on the drive, zero host footprint | ✅ current |

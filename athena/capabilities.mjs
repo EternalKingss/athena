@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
+import { PATHS } from './paths.mjs';
 
 const execAsync = promisify(exec);
 
@@ -124,10 +125,17 @@ async function detect() {
 
   const mcp = detectMCPServers();
 
+  // Bundled tools living on the drive itself (in runtime/)
+  const bundled = {
+    python: existsSync(PATHS.python),
+    lokiRs: existsSync(PATHS.lokiRs),
+    lokiPy: existsSync(PATHS.lokiPy),
+  };
+
   return {
     langs, compilers, pkgMgrs, containers,
     browsers, ides, databases, devops, utils,
-    gpus, mcp,
+    gpus, mcp, bundled,
     node: process.version,
     detectedAt: new Date().toISOString(),
   };
@@ -163,6 +171,14 @@ export function capabilitiesSummary() {
   if (caps.utils.length)      lines.push('  Utilities:        ' + caps.utils.join(', '));
   if (caps.gpus.length)       lines.push('  GPUs:             ' + caps.gpus.join(' | '));
   if (caps.mcp.length)        lines.push('  MCP Servers:      ' + caps.mcp.join(', '));
+
+  const b = caps.bundled;
+  const bundledList = [
+    b.python ? 'python (drive)' : null,
+    b.lokiRs ? 'loki-rs (drive)' : null,
+    b.lokiPy ? 'loki-py (drive)' : null,
+  ].filter(Boolean);
+  if (bundledList.length) lines.push('  Bundled on drive: ' + bundledList.join(', '));
 
   return lines.join('\n');
 }
