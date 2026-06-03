@@ -2,19 +2,19 @@
 
 A personal AI agent that lives on this drive and runs on whatever machine you plug into. She can run shell commands, read/write files, search the web, remember things across sessions, spawn sub-agents for parallel work, and build her own skill library over time. Her memory lives on the drive and travels with you.
 
-Nothing is installed on the host. Nothing is left behind.
+Nothing is installed on the host. Nothing is left behind. Zero npm dependencies — only Node built-ins.
 
 ## Providers
 
-Athena supports three AI providers — switch between them from the UI dropdown at any time:
+Switch between providers from the UI dropdown at any time, no restart needed:
 
 | Provider | Models | Key needed |
 |----------|--------|-----------|
 | **OpenAI** | gpt-5.5, gpt-5.4-mini, gpt-4o, gpt-4o-mini | `OPENAI_API_KEY` |
 | **Anthropic** | claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5 | `ANTHROPIC_API_KEY` |
-| **NVIDIA NIM** | Nemotron, DeepSeek, Llama, Qwen | `NVIDIA_API_KEY` |
+| **NVIDIA NIM** | Nemotron-Super-120B, DeepSeek-V4-Pro, Llama-3.3-70B, Qwen3-235B, Nemotron-Ultra-253B | `NVIDIA_API_KEY` |
 
-You only need keys for the providers you actually use. OpenAI is also required for semantic memory (embeddings) regardless of which model you chat with.
+You only need keys for the providers you use. OpenAI is also required for semantic memory (embeddings) regardless of which model you chat with.
 
 ## Setup (do this once)
 
@@ -48,7 +48,7 @@ You only need the platforms you plug into.
 
 Athena opens in your browser. Type to talk. Use the dropdown to switch models.
 
-**UI commands:** `/task <goal>` · `/mem` · `/forget` · `/model <name>` · `/exit`
+**UI commands:** `/task <goal>` · `/spawn <name> <goal>` · `/mem` · `/forget` · `/model <name>` · `/exit`
 
 ## What she can do
 
@@ -74,16 +74,21 @@ Athena opens in your browser. Type to talk. Use the dropdown to switch models.
 ### Memory
 Two tiers:
 
-- **Long-term memory** (`data/memory/athena.md`, `user.md`) — facts that survive across sessions. Loaded into every conversation. Bounded size, structured entries.
+- **Long-term memory** (`data/memory/athena.md`, `user.md`) — facts that survive across sessions. Loaded into every conversation. Bounded to 2,200 chars to stay concise.
 - **Semantic recall** — every memory entry and session summary is embedded (OpenAI `text-embedding-3-small`) and stored in `embeddings.jsonl`. `recall` finds relevant past context by meaning, not just keywords.
+
+### Context management
+- **Auto-compression** kicks in at 40 messages — the middle of the conversation is summarized into bullets, keeping the first 4 messages (system context) and last 10 (recent context). Your active task list is reinjected so nothing is lost.
+- **Tool output compression** — large tool results are automatically compressed before they enter the context window. JSON keeps its full schema but truncates long values; logs deduplicate repeated lines; code has comments stripped; all types get a head+tail treatment if still large. Triggers at 1,500 chars, hard cap at 8,000. The UI always shows you the full raw output — only the LLM gets the compressed version.
+- **50 tool-call cap** per turn prevents runaway loops.
 
 ### Skills
 Athena builds her own playbook. When she solves something non-trivial, she saves it as a skill in `skills/`. Skills are plain markdown with YAML frontmatter — hand-editable, version-controlled, loaded on demand.
 
-Current skills: `system-health`, `git-workflow`, `dev-setup`, `remove-mcafee-windows`, `windows-pip-overlay-control`, `windows-safe-speed-cleanup`.
+Current built-in skills: `system-health`, `git-workflow`, `dev-setup`, `remove-mcafee-windows`, `windows-pip-overlay-control`, `windows-safe-speed-cleanup`.
 
 ### Multi-agent
-`spawn_agent` launches a background agent with its own message history. Agents communicate via a shared in-memory workspace (`workspace_write` / `workspace_read`). Athena uses this to parallelize research, diagnostics, or any task with independent sub-goals.
+`spawn_agent` launches a background agent with its own isolated message history and task list. Agents communicate via a shared in-memory workspace (`workspace_write` / `workspace_read`). Final results are automatically posted to the workspace so the main agent can read them without being asked. The UI shows each agent in its own tab with a live status indicator and a toast notification when it finishes.
 
 ## What lives where
 
@@ -105,6 +110,7 @@ runtime/                 — portable Node binaries (gitignored, download separa
 athena/
   athena.mjs      entry point (CLI + UI)
   api.mjs         LLM API calls — OpenAI, Anthropic, NVIDIA streaming
+  compress.mjs    tool output compression (JSON, code, logs, text)
   config.mjs      env loading, constants, model lists
   core.mjs        turn loop, task runner, context compression
   embed.mjs       semantic embeddings, cosine similarity search
@@ -121,4 +127,15 @@ athena/
 
 - Your API keys sit in `config/.env` in plaintext. If you lose the drive or plug into a compromised machine, treat the keys as burned and rotate them.
 - `AUTO_APPROVE=true` in `.env` means Athena runs shell commands and writes files without asking. Only use on machines you fully trust.
+- In UI mode without `AUTO_APPROVE`, destructive tools (`run_shell`, `write_file`, `edit_file`) are blocked for the main agent — background agents spawned via `spawn_agent` auto-approve since they run unattended.
 - Do not plug this into locked-down or monitored environments (work, government, someone else's secured box). An agent running shell commands and calling out to an API is exactly what those systems flag.
+
+## Roadmap
+
+| Phase | What shipped | Status |
+|-------|-------------|--------|
+| **1** | Portable launchers (Windows/macOS/Linux), chat, shell + file tools, basic memory | ✓ done |
+| **2** | Web fetch, live web search, patch/diff editing, multi-step task runner | ✓ done |
+| **3** | Rolling session summaries, session save/resume, smarter context management | ✓ done |
+| **4** | Modular architecture, multi-provider (Anthropic + NVIDIA), semantic recall + embeddings | ✓ done |
+| **5** | Multi-agent system, self-building skill library, full web UI, security hardening, tool output compression, codebase cleanup | ✅ current |
