@@ -11,19 +11,28 @@ let _cache = null;
 
 async function probe(cmd) {
   try {
-    const { stdout } = await execAsync(cmd, { timeout: 2500, stdio: ['ignore', 'pipe', 'pipe'] });
+    const { stdout } = await execAsync(cmd, { timeout: 5000 });
     return stdout.trim() || null;
-  } catch { return null; }
+  } catch (e) {
+    // Non-zero exit is normal (last which failed) — still return any stdout collected
+    return e.stdout?.trim() || null;
+  }
 }
 
-async function which(name) {
-  const cmd = process.platform === 'win32' ? `where "${name}" 2>nul` : `which "${name}" 2>/dev/null`;
-  return (await probe(cmd)) !== null;
-}
-
+// One subprocess per group — far fewer disk seeks than one-per-binary.
 async function checkAll(names) {
-  const hits = await Promise.allSettled(names.map(n => which(n)));
-  return names.filter((_, i) => hits[i].status === 'fulfilled' && hits[i].value);
+  if (!names.length) return [];
+  let out;
+  if (process.platform === 'win32') {
+    const checks = names.map(n => `(where "${n}" >nul 2>&1 && echo ${n})`).join(' & ');
+    out = await probe(`cmd /d /c "${checks}"`);
+  } else {
+    const list = names.map(n => `"${n}"`).join(' ');
+    out = await probe(`bash -c 'for c in ${list}; do which "$c" >/dev/null 2>&1 && echo "$c"; done'`);
+  }
+  if (!out) return [];
+  const found = new Set(out.split('\n').map(l => l.trim()).filter(Boolean));
+  return names.filter(n => found.has(n));
 }
 
 async function detectGPUs() {
@@ -31,10 +40,10 @@ async function detectGPUs() {
   const isMac = process.platform === 'darwin';
   const isWin = process.platform === 'win32';
 
-  const nvOut = await probe('nvidia-smi --query-gpu=name --format=csv,noheader 2>&1');
+  const nvOut = await probe('nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null');
   if (nvOut) nvOut.split('\n').filter(Boolean).forEach(n => gpus.push('NVIDIA ' + n.trim()));
 
-  const rocmOut = await probe('rocm-smi --showproductname 2>&1 | grep -i "gpu\\|card" | head -4');
+  const rocmOut = await probe('rocm-smi --showproductname 2>/dev/null | grep -i "gpu\\|card" | head -4');
   if (rocmOut) rocmOut.split('\n').filter(Boolean).forEach(n => gpus.push('AMD ' + n.trim()));
 
   if (!gpus.length && isWin) {

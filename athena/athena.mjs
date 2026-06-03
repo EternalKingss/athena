@@ -155,8 +155,9 @@ async function runCLI() {
 }
 
 // ---- Entry point ----
-// Detect machine capabilities once before entering the main loop.
-await detectCapabilities();
+// Fire capability detection in the background — HDD-friendly, non-blocking.
+// Results land in the cache and appear in the system prompt from turn 2 onward.
+detectCapabilities().catch(() => {});
 
 if (UI_MODE) {
   _globalEmit = uiEmit;
