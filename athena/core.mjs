@@ -3,6 +3,7 @@ import { chat, chatStream } from './api.mjs';
 import { TOOLS, DESTRUCTIVE, runTool } from './tools.mjs';
 import { systemPrompt } from './personality.mjs';
 import { AUTO } from './config.mjs';
+import { compressOutput } from './compress.mjs';
 
 // ---- Session state ----
 // These are scoped to the MAIN agent only.
@@ -139,7 +140,8 @@ export async function turn(messages, emit, opts = {}) {
         result = `Error: ${e.message}`;
       }
       emit({ type: 'tool_result', name: call.function.name, result });
-      toolResults.push({ role: 'tool', tool_call_id: call.id, content: String(result) });
+      const compressed = compressOutput(String(result), call.function.name);
+      toolResults.push({ role: 'tool', tool_call_id: call.id, content: compressed });
     }
     messages.push(...toolResults);
   }
