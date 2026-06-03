@@ -92,7 +92,7 @@ export async function runTool(name, args, preApproved, sessionTodos, setSessionT
     const count = original.split(args.old_str).length - 1;
     if (count === 0) return 'edit_file: old_str not found in ' + target;
     if (count > 1)   return 'edit_file: old_str appears ' + count + ' times — make it more unique';
-    await writeFile(target, original.replace(args.old_str, args.new_str));
+    await writeFile(target, original.replace(args.old_str, () => args.new_str));
     return 'Edited ' + target;
   }
 
@@ -124,8 +124,8 @@ export async function runTool(name, args, preApproved, sessionTodos, setSessionT
   }
   if (name === 'clipboard_write') {
     if (process.platform === 'win32') {
-      const safeText = String(args.text).split("'").join("''");
-      return runPS('Set-Clipboard ' + JSON.stringify(safeText));
+      const b64 = Buffer.from(String(args.text)).toString('base64');
+      return runPS(`[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('${b64}')) | Set-Clipboard`);
     }
     try { const p = await import('node:child_process'); const proc = p.spawn('xclip -selection clipboard', [], { shell: true }); proc.stdin.write(args.text); proc.stdin.end(); return 'Copied.'; } catch { return '(clipboard unavailable)'; }
   }

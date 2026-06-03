@@ -248,6 +248,22 @@ async function* claudeStream(messages, tools, base, key) {
       if (ev.type === 'message_stop') return;
     }
   }
+
+  // Yield any tool blocks that never received content_block_stop (truncated stream)
+  for (const block of Object.values(toolBlocks)) {
+    yield {
+      choices: [{
+        delta: {
+          tool_calls: [{
+            index:    block.toolCallIndex,
+            id:       block.id,
+            type:     'function',
+            function: { name: block.name, arguments: block.input_json },
+          }],
+        },
+      }],
+    };
+  }
 }
 
 // ---- Embedding generation (OpenAI only — Anthropic has no embeddings API) ----
