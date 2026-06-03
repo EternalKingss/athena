@@ -5,6 +5,7 @@ import { PATHS } from './paths.mjs';
 import { NAME, MODEL } from './config.mjs';
 import { loadMemBlock } from './memory.mjs';
 import { scanSkills } from './skills.mjs';
+import { capabilitiesSummary } from './capabilities.mjs';
 
 export function systemPrompt() {
   const agentBlock = loadMemBlock(PATHS.agentMem, 'MEMORY (your notes)');
@@ -112,8 +113,9 @@ export function systemPrompt() {
     `- Use recall before answering questions about past work — check if you've done this before.`,
     `- NEVER write working files (scripts, fixes, generated code, temp outputs) inside your own drive directory. Those belong on the host machine. Use the host temp dir: ${tmpdir()}. Or place files in the user's home directory or an existing project folder they've specified. The ATHENA drive is only for your own source code, skills, and memory.`,
     ``,
-    `Tools: run_shell, read_file, write_file, edit_file, list_dir, fetch_url, web_search, memory, recall, clipboard_read, clipboard_write, notify, open, clarify, todo, load_skill, save_skill, update_skill, spawn_agent, workspace_read, workspace_write.`,
+    `Tools: run_shell, read_file, write_file, edit_file, list_dir, fetch_url, web_search, memory, recall, clipboard_read, clipboard_write, notify, open, clarify, todo, load_skill, save_skill, update_skill, spawn_agent, workspace_read, workspace_write, machine_info.`,
     `Host: ${process.platform} (${process.arch}). CWD: ${process.cwd()}.`,
+    capabilitiesSummary() || '',
     ``,
     `MULTI-AGENT RULES:`,
     `- You can spawn background agents with spawn_agent to run tasks in parallel while you stay available.`,
