@@ -7,6 +7,7 @@ import { BRAVE_KEY, AUTO } from './config.mjs';
 import { handleMemoryTool } from './memory.mjs';
 import { loadSkill, saveSkill, updateSkill } from './skills.mjs';
 import { handleRecallTool } from './embed.mjs';
+import { getCachedCapabilities, detectCapabilities, clearCapabilityCache } from './capabilities.mjs';
 
 let _agentFns = null;
 export function setAgentFunctions(fns) { _agentFns = fns; }
@@ -57,6 +58,7 @@ export const TOOLS = [
   { type: 'function', function: { name: 'spawn_agent', description: 'Spawn a background agent to work on a task in parallel. Use to run multiple things simultaneously.', parameters: { type: 'object', properties: { name: { type: 'string', description: 'Short agent name (e.g. researcher, syscheck).' }, goal: { type: 'string', description: 'Full task description for the agent.' } }, required: ['name','goal'] } } },
   { type: 'function', function: { name: 'workspace_read', description: 'Read results posted by agents to the shared workspace.', parameters: { type: 'object', properties: { key_prefix: { type: 'string' } } } } },
   { type: 'function', function: { name: 'workspace_write', description: 'Post a result to the shared workspace so other agents can access it.', parameters: { type: 'object', properties: { key: { type: 'string' }, data: { type: 'string' } }, required: ['key','data'] } } },
+  { type: 'function', function: { name: 'machine_info', description: 'Return detected machine capabilities: installed languages, compilers, package managers, containers, browsers, IDEs, databases, DevOps tools, utilities, GPUs, and MCP servers. Pass rescan:true to re-detect.', parameters: { type: 'object', properties: { rescan: { type: 'boolean' } } } } },
 ];
 
 export async function runTool(name, args, preApproved, sessionTodos, setSessionTodos, requestUserInput) {
@@ -171,6 +173,12 @@ export async function runTool(name, args, preApproved, sessionTodos, setSessionT
   if (name === 'load_skill')   return loadSkill(args.name);
   if (name === 'save_skill')   return await saveSkill(args.name, args.description, args.content);
   if (name === 'update_skill') return await updateSkill(args.name, args.description, args.content);
+
+  if (name === 'machine_info') {
+    if (args.rescan) clearCapabilityCache();
+    const caps = getCachedCapabilities() || await detectCapabilities();
+    return JSON.stringify(caps, null, 2);
+  }
 
   if (name === 'spawn_agent') {
     if (!_agentFns?.spawnAgent) return 'Agent system not initialized.';
