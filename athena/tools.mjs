@@ -10,6 +10,8 @@ import { handleMemoryTool } from './memory.mjs';
 import { loadSkill, saveSkill, updateSkill } from './skills.mjs';
 import { handleRecallTool } from './embed.mjs';
 import { getCachedCapabilities, detectCapabilities, clearCapabilityCache } from './capabilities.mjs';
+import { logAuditEvent } from './audit.mjs';
+import { getRemediationPlan } from './remediate.mjs';
 
 let _agentFns = null;
 export function setAgentFunctions(fns) { _agentFns = fns; }
@@ -61,10 +63,20 @@ export const TOOLS = [
   { type: 'function', function: { name: 'workspace_read', description: 'Read results posted by agents to the shared workspace.', parameters: { type: 'object', properties: { key_prefix: { type: 'string' } } } } },
   { type: 'function', function: { name: 'workspace_write', description: 'Post a result to the shared workspace so other agents can access it.', parameters: { type: 'object', properties: { key: { type: 'string' }, data: { type: 'string' } }, required: ['key','data'] } } },
   { type: 'function', function: { name: 'machine_info', description: 'Return detected machine capabilities: installed languages, compilers, package managers, containers, browsers, IDEs, databases, DevOps tools, utilities, GPUs, and MCP servers. Pass rescan:true to re-detect.', parameters: { type: 'object', properties: { rescan: { type: 'boolean' } } } } },
+  { type: 'function', function: { name: 'boot_triage', description: 'Run a boot health check: firewall status, disk space, AV, SSH exposure, fail2ban, pending system updates. Returns pass/warn/critical for each check.', parameters: { type: 'object', properties: { format: { type: 'string', enum: ['summary', 'full'] } } } } },
+  { type: 'function', function: { name: 'threat_assess', description: 'Assess the machine threat surface: risk score (0-100), open ports, SUID binaries, missing firewall/AV, world-writable directories. Returns HIGH/MEDIUM/LOW risk level.', parameters: { type: 'object', properties: {} } } },
+  { type: 'function', function: { name: 'network_scan', description: 'Show network situational awareness: interfaces, DNS servers, listening ports, routing table. Pass deep:true and target IP to run an nmap scan if available.', parameters: { type: 'object', properties: { target: { type: 'string', description: 'Target IP for nmap scan (default: 127.0.0.1)' }, deep: { type: 'boolean' } } } } },
+  { type: 'function', function: { name: 'generate_report', description: 'Generate a professional Markdown report. type: system (hardware+software inventory), security (threats+triage), network (interfaces+ports), full (all combined).', parameters: { type: 'object', properties: { type: { type: 'string', enum: ['system', 'security', 'network', 'full'] } }, required: ['type'] } } },
+  { type: 'function', function: { name: 'audit_replay', description: 'Replay the audit trail for a given date. Shows all tool calls and session events with timestamps.', parameters: { type: 'object', properties: { date: { type: 'string', description: 'YYYY-MM-DD format (default: today)' } } } } },
+  { type: 'function', function: { name: 'machine_diff', description: 'Compare the current machine state against the last saved fingerprint. Shows what tools, languages, or hardware changed since the last visit.', parameters: { type: 'object', properties: {} } } },
+  { type: 'function', function: { name: 'remediate', description: 'Get a guided remediation plan for a security or system issue. Returns exact commands to fix the problem. Set execute:true to apply the fix (requires approval).', parameters: { type: 'object', properties: { issue: { type: 'string', description: 'The issue to fix, e.g. "firewall not enabled", "ssh root login allowed", "pending updates"' }, execute: { type: 'boolean' } }, required: ['issue'] } } },
 ];
 
 export async function runTool(name, args, preApproved, sessionTodos, setSessionTodos, requestUserInput) {
   const ok = preApproved || AUTO;
+
+  // Audit every tool call (non-blocking, best-effort)
+  logAuditEvent('tool_call', { tool: name, args }).catch(() => {});
 
   if (name === 'run_shell') {
     if (!ok) throw new Error('not approved');
@@ -186,6 +198,77 @@ export async function runTool(name, args, preApproved, sessionTodos, setSessionT
     if (args.rescan) clearCapabilityCache();
     const caps = getCachedCapabilities() || await detectCapabilities();
     return JSON.stringify(caps, null, 2);
+  }
+
+  if (name === 'boot_triage') {
+    const { runBootTriage, formatTriageReport } = await import('./triage.mjs');
+    const triage = await runBootTriage();
+    if (args.format === 'full') return formatTriageReport(triage);
+    const STATUS_ICON = { ok: '✓', warn: '⚠', critical: '✗', info: 'ℹ', unknown: '?' };
+    const lines = [triage.summary, ''];
+    triage.checks.forEach(c => lines.push(`  ${STATUS_ICON[c.status] || '?'} ${c.name}: ${c.detail}`));
+    return lines.join('\n');
+  }
+
+  if (name === 'threat_assess') {
+    const { assessThreatSurface, formatThreatReport } = await import('./threat.mjs');
+    return formatThreatReport(await assessThreatSurface());
+  }
+
+  if (name === 'network_scan') {
+    const { handleNetworkScanTool } = await import('./network.mjs');
+    return handleNetworkScanTool(args);
+  }
+
+  if (name === 'generate_report') {
+    const { handleReportTool } = await import('./report.mjs');
+    return handleReportTool(args);
+  }
+
+  if (name === 'audit_replay') {
+    const { replayAudit } = await import('./audit.mjs');
+    return replayAudit(args.date);
+  }
+
+  if (name === 'machine_diff') {
+    const { checkMachineReturn } = await import('./machines.mjs');
+    const caps = getCachedCapabilities() || await detectCapabilities();
+    const result = await checkMachineReturn(caps);
+    return result.report;
+  }
+
+  if (name === 'remediate') {
+    const plan = getRemediationPlan(args.issue);
+    if (!plan.found) return plan.message;
+    if (!args.execute) {
+      const lines = [
+        `Remediation plan for: ${plan.issue}`,
+        `Platform: ${plan.platform}`,
+        '',
+        `Check command: ${plan.check}`,
+        '',
+        'Steps:',
+        ...plan.steps.map((s, i) => `  ${i + 1}. ${s}`),
+        '',
+        `Explanation: ${plan.explain}`,
+        '',
+        'Call remediate with execute:true to apply (requires approval).',
+      ];
+      if (!plan.steps.length) lines.splice(5, 0, '  (no automated steps — see explanation)');
+      return lines.join('\n');
+    }
+    if (!ok) throw new Error('not approved');
+    if (!plan.steps.length) return plan.explain;
+    const results = [];
+    for (const step of plan.steps) {
+      try {
+        const { stdout, stderr } = await execAsync(step, { timeout: 30000 });
+        results.push(`✓ ${step}\n  ${((stdout || stderr || '').trim()).slice(0, 200)}`);
+      } catch (e) {
+        results.push(`✗ ${step}\n  ${e.message.slice(0, 200)}`);
+      }
+    }
+    return results.join('\n\n');
   }
 
   if (name === 'spawn_agent') {

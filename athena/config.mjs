@@ -24,6 +24,7 @@ export const NAME             = CFG.AGENT_NAME        || 'Athena';
 export const BRAVE_KEY        = CFG.BRAVE_API_KEY     || process.env.BRAVE_API_KEY     || '';
 export const NVIDIA_KEY       = CFG.NVIDIA_API_KEY    || process.env.NVIDIA_API_KEY    || '';
 export const ANTHROPIC_KEY    = CFG.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY || '';
+export const VOYAGE_KEY       = CFG.VOYAGE_API_KEY    || process.env.VOYAGE_API_KEY    || '';
 export const NVIDIA_BASE      = 'https://integrate.api.nvidia.com/v1';
 export const ANTHROPIC_BASE   = 'https://api.anthropic.com/v1';
 export const ANTHROPIC_VERSION = '2023-06-01';

@@ -14,7 +14,9 @@ import { turn, runTask, setRequestUserInput, freshMessages, setInterrupt, isActi
 import { serveUI, uiEmit } from './ui.mjs';
 import { setAgentFunctions } from './tools.mjs';
 import { spawnAgent, listAgents, workspaceRead, workspaceWrite } from './agents.mjs';
-import { detectCapabilities } from './capabilities.mjs';
+import { detectCapabilities, getCachedCapabilities } from './capabilities.mjs';
+import { checkMachineReturn, saveFingerprint } from './machines.mjs';
+import { logAuditEvent } from './audit.mjs';
 
 const UI_MODE = process.argv.includes('--ui');
 
@@ -64,6 +66,8 @@ async function runCLI() {
     if (closing) return; closing = true;
     console.log('');
     await saveAndSummarize(messages);
+    const caps = getCachedCapabilities();
+    if (caps) await Promise.all([saveFingerprint(caps), logAuditEvent('session_end')]).catch(() => {});
     rl.close();
     process.exit(0);
   };
@@ -175,17 +179,39 @@ async function runCLI() {
 
 // ---- Entry point ----
 // Fire capability detection in the background — HDD-friendly, non-blocking.
-// When detection resolves we backfill messages[0] in case it was generated before
-// the cache was populated (e.g. user ran /forget within the first ~5 s).
+// All boot intelligence runs in this .then() so the UI is immediately responsive.
 let _activeMessages = null;
 detectCapabilities()
-  .then(() => { if (_activeMessages?.[0]?.role === 'system') _activeMessages[0].content = systemPrompt(); })
+  .then(async caps => {
+    // Backfill system prompt with fresh machine data
+    if (_activeMessages?.[0]?.role === 'system') _activeMessages[0].content = systemPrompt();
+
+    // Machine return check (Pillar 6/10)
+    const machineResult = await checkMachineReturn(caps).catch(() => null);
+    if (machineResult?.report) _globalEmit?.({ type: 'system', text: machineResult.report });
+
+    // Boot triage — emit warnings only, not clean-pass noise (Pillar 1)
+    const { runBootTriage } = await import('./triage.mjs');
+    const triage = await runBootTriage().catch(() => null);
+    if (triage) {
+      const urgent = triage.checks.filter(c => c.status === 'critical' || c.status === 'warn');
+      if (urgent.length) _globalEmit?.({ type: 'system', text: `Boot triage: ${triage.summary}` });
+    }
+
+    // Audit session start (Pillar 5)
+    await logAuditEvent('session_start', { platform: process.platform, arch: process.arch, model: (await import('./config.mjs')).state.activeModel }).catch(() => {});
+  })
   .catch(() => {});
 
 if (UI_MODE) {
   _globalEmit = uiEmit;
   _activeMessages = freshMessages();
-  process.on('SIGINT', async () => { await saveAndSummarize(_activeMessages); process.exit(0); });
+  process.on('SIGINT', async () => {
+    await saveAndSummarize(_activeMessages);
+    const caps = getCachedCapabilities();
+    if (caps) await Promise.all([saveFingerprint(caps), logAuditEvent('session_end')]).catch(() => {});
+    process.exit(0);
+  });
   await serveUI(_activeMessages);
 } else {
   await runCLI();
