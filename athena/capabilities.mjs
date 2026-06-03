@@ -25,7 +25,7 @@ async function checkAll(names) {
   let out;
   if (process.platform === 'win32') {
     const checks = names.map(n => `(where "${n}" >nul 2>&1 && echo ${n})`).join(' & ');
-    out = await probe(`cmd /d /c "${checks}"`);
+    out = await probe(`cmd /d /c ${checks}`);
   } else {
     const list = names.map(n => `"${n}"`).join(' ');
     out = await probe(`bash -c 'for c in ${list}; do which "$c" >/dev/null 2>&1 && echo "$c"; done'`);

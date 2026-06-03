@@ -156,7 +156,9 @@ async function runCLI() {
 
 // ---- Entry point ----
 // Fire capability detection in the background — HDD-friendly, non-blocking.
-// Results land in the cache and appear in the system prompt from turn 2 onward.
+// capabilitiesSummary() returns '' until the cache populates, so turn 1 omits
+// the machine block. It appears automatically once the scan resolves (usually
+// before the first response is sent).
 detectCapabilities().catch(() => {});
 
 if (UI_MODE) {
