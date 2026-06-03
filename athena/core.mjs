@@ -23,7 +23,7 @@ const COMPRESS_AT        = 40;
 const COMPRESS_KEEP_START = 4;
 const COMPRESS_KEEP_END   = 10;
 
-export async function maybeCompress(messages, emit) {
+export async function maybeCompress(messages, emit, currentTodos = []) {
   if (messages.length < COMPRESS_AT) return;
   const start  = messages.slice(0, COMPRESS_KEEP_START);
   const end    = messages.slice(-COMPRESS_KEEP_END);
@@ -37,8 +37,8 @@ export async function maybeCompress(messages, emit) {
       { role: 'user', content: middle.filter(m => m.role === 'user' || m.role === 'assistant').map(m => `${m.role}: ${m.content || '[tool]'}`).join('\n') },
     ]);
     const summary = { role: 'assistant', content: `[Context compressed — ${middle.length} messages → summary]\n${sum.content || ''}` };
-    const todoReinject = SESSION_TODOS.length
-      ? [{ role: 'user', content: `[Task list after compression]\n${JSON.stringify(SESSION_TODOS)}` }]
+    const todoReinject = currentTodos.length
+      ? [{ role: 'user', content: `[Task list after compression]\n${JSON.stringify(currentTodos)}` }]
       : [];
     messages.length = 0;
     messages.push(...start, summary, ...todoReinject, ...end);
@@ -50,13 +50,14 @@ export async function maybeCompress(messages, emit) {
 // opts.isolated = true → use private todos + no-op clarify (for background agents)
 export async function turn(messages, emit, opts = {}) {
   emit({ type: 'status', text: 'thinking' });
-  await maybeCompress(messages, emit);
 
   // Isolated agents get their own todo list and a no-op input handler
   // so they never block or interfere with the main agent's state
   let agentTodos = opts.isolated ? [] : SESSION_TODOS;
   const setAgentTodos = opts.isolated ? (t => { agentTodos = t; }) : setSessionTodos;
   const inputHandler  = opts.isolated ? _noopInput : _requestUserInput;
+
+  await maybeCompress(messages, emit, agentTodos);
 
   const MAX_TOOL_ITERATIONS = 50;
   let toolIterations = 0;

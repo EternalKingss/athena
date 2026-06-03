@@ -308,7 +308,7 @@ function buildScript(agentName) {
     'function onKey(e){if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendMsg();}}',
     'function resize(el){el.style.height="auto";el.style.height=Math.min(el.scrollHeight,160)+"px";}',
     'function clearCtx(){fetch("/clear",{method:"POST"});agentState.main.pane.innerHTML="";addMsg("main","sys","Context cleared.");}',
-    'async function openMem(){document.getElementById("mem-panel").classList.add("open");const r=await fetch("/memory");const data=await r.json();const el=document.getElementById("mem-content");if(!data.length){el.innerHTML="<div class=\'mem-empty\'>No memories yet.</div>";return;}el.innerHTML="";for(const m of data){const item=document.createElement("div");item.className="mem-item";item.innerHTML="<div class=\'mem-type\'>"+(m.type||"note")+"</div><div class=\'mem-text\'>"+m.content+"</div>";el.appendChild(item);}}',
+    'async function openMem(){document.getElementById("mem-panel").classList.add("open");const r=await fetch("/memory");const data=await r.json();const el=document.getElementById("mem-content");if(!data.length){el.innerHTML="<div class=\'mem-empty\'>No memories yet.</div>";return;}el.innerHTML="";for(const m of data){const item=document.createElement("div");item.className="mem-item";const typeEl=document.createElement("div");typeEl.className="mem-type";typeEl.textContent=m.type||"note";const textEl=document.createElement("div");textEl.className="mem-text";textEl.textContent=m.content;item.appendChild(typeEl);item.appendChild(textEl);el.appendChild(item);}}',
     'function closeMem(){document.getElementById("mem-panel").classList.remove("open");}',
     'addMsg("main","sys","' + N + ' online. Use + New Agent to run tasks in parallel.");',
     '</script></body></html>',
