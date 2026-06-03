@@ -165,11 +165,13 @@ export async function turn(messages, emit, opts = {}) {
             emit({ type: 'token', content: delta.content });
           }
         }
-      } catch { /* non-fatal */ }
+      } catch { /* non-fatal — fall through to push placeholder */ }
       if (summary) {
         emit({ type: 'stream_end' });
-        messages.push({ role: 'assistant', content: summary });
+      } else {
+        summary = '[interrupted — summary unavailable]';
       }
+      messages.push({ role: 'assistant', content: summary });
       emit({ type: 'done' });
       return;
     }

@@ -361,7 +361,9 @@ export async function serveUI(messages) {
     }
     if (req.url === '/events' && req.method === 'GET') {
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'Access-Control-Allow-Origin': '*' });
-      res.write(':\n\n'); sseClients.add(res); req.on('close', () => sseClients.delete(res)); return;
+      res.write(':\n\n'); sseClients.add(res);
+      req.on('close', () => { sseClients.delete(res); if (sseClients.size === 0) setInterrupt(); });
+      return;
     }
     if (req.url === '/chat' && req.method === 'POST') {
       const body = await readBody(req, res); if (body === null) return;

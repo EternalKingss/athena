@@ -27,6 +27,10 @@ TARGET_DIR="$RUNTIME_DIR/python"
 FILENAME="cpython-$VERSION+$DATE-$TRIPLE-install_only.tar.gz"
 URL="https://github.com/indygreg/python-build-standalone/releases/download/$DATE/$FILENAME"
 TMP_FILE="$RUNTIME_DIR/_python_tmp.tar.gz"
+TMP_DIR="$RUNTIME_DIR/_python_extract"
+
+# Always clean up temp files, even on error or Ctrl+C
+trap 'rm -f "$TMP_FILE"; rm -rf "$TMP_DIR"' EXIT
 
 if [ -x "$TARGET_DIR/bin/python3" ]; then
   echo "  Portable Python already present at $TARGET_DIR"
@@ -44,7 +48,6 @@ else
 fi
 
 echo "  Extracting..."
-TMP_DIR="$RUNTIME_DIR/_python_extract"
 mkdir -p "$TMP_DIR"
 tar -xzf "$TMP_FILE" -C "$TMP_DIR"
 
@@ -55,7 +58,6 @@ if [ -d "$EXTRACTED" ]; then
 else
   echo "  ERROR: unexpected archive structure"; exit 1
 fi
-rm -rf "$TMP_DIR" "$TMP_FILE"
 
 echo "  Portable Python ready at: $TARGET_DIR/bin/python3"
 "$TARGET_DIR/bin/python3" --version

@@ -33,8 +33,7 @@ export const PATHS = {
   lokiPy:     join(ROOT, 'tools', 'loki', 'loki.py'),
 };
 
-// Ensure required dirs exist at startup
-mkdirSync(PATHS.sessDir, { recursive: true });
-mkdirSync(PATHS.memDir,  { recursive: true });
-mkdirSync(PATHS.skills,  { recursive: true });
-mkdirSync(PATHS.tools,   { recursive: true });
+// Ensure required dirs exist at startup — soft-fail on read-only drives
+for (const d of [PATHS.sessDir, PATHS.memDir, PATHS.skills, PATHS.tools]) {
+  try { mkdirSync(d, { recursive: true }); } catch { /* read-only mount — continue */ }
+}
