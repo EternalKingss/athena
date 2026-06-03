@@ -290,4 +290,4 @@ export async function runTool(name, args, preApproved, sessionTodos, setSessionT
   return 'Unknown tool: ' + name;
 }
 
-export const DESTRUCTIVE = new Set(['run_shell', 'write_file', 'edit_file']);
+export const DESTRUCTIVE = new Set(['run_shell', 'write_file', 'edit_file', 'remediate']);

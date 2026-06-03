@@ -45,8 +45,9 @@ export async function runBootTriage() {
   // ---- Disk space ----
   const disks = caps?.system?.disks || [];
   for (const d of disks) {
-    const freeM  = d.match(/(\d+\.?\d*)\s*GB\s+free/i);
-    const totalM = d.match(/^[^:]+:\s+(\d+\.?\d*)\s*GB/i) || d.match(/(\d+\.?\d*)\s*GB\s+total/i);
+    // df -h outputs G/Gi on Linux/Mac; wmic computes GB on Windows — match all forms
+    const freeM  = d.match(/(\d+\.?\d*)\s*G[iB]*\s+free/i);
+    const totalM = d.match(/(\d+\.?\d*)\s*G[iB]*\s+total/i) || d.match(/:\s*(\d+\.?\d*)\s*G[iB]*\s*\(/i);
     const label  = (d.split(':')[0] || 'Disk').trim();
     if (freeM && totalM) {
       const freeGB  = parseFloat(freeM[1]);
@@ -83,7 +84,7 @@ export async function runBootTriage() {
 
   // ---- SSH exposure ----
   if (!isWin) {
-    const out = await probe("ss -tlnp 2>/dev/null | grep -E ':22 |:22$' | head -3");
+    const out = await probe("ss -tlnp 2>/dev/null | grep -E ':22 |:22$' | head -3 || netstat -an 2>/dev/null | grep -E '\\.22\\s|LISTEN' | grep ':22' | head -3");
     if (out) {
       checks.push({ name: 'SSH', status: 'warn', detail: 'Port 22 listening — verify key-based auth is enforced' });
     }

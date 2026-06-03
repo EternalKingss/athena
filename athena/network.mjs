@@ -30,15 +30,15 @@ async function getDNSServers() {
       .map(l => l.split(':').slice(1).join(':').trim())
       .filter(Boolean);
   }
+  if (isMac) {
+    const out = await probe('scutil --dns 2>/dev/null | grep nameserver | head -5');
+    return out.split('\n').map(l => l.replace(/.*nameserver\[.*?\]\s*:\s*/, '').trim()).filter(Boolean);
+  }
   if (existsSync('/etc/resolv.conf')) {
     return readFileSync('/etc/resolv.conf', 'utf8')
       .split('\n')
       .filter(l => l.startsWith('nameserver'))
       .map(l => l.replace('nameserver', '').trim());
-  }
-  if (isMac) {
-    const out = await probe('scutil --dns 2>/dev/null | grep nameserver | head -5');
-    return out.split('\n').map(l => l.replace(/.*nameserver\[.*?\]\s*:\s*/, '').trim()).filter(Boolean);
   }
   return [];
 }

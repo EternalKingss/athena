@@ -87,6 +87,7 @@ const PLAYBOOKS = {
 };
 
 function matchPlaybook(issue) {
+  if (!issue) return null;
   const lower = issue.toLowerCase();
   if (/firewall|ufw|iptables|nftables/i.test(lower))  return PLAYBOOKS.firewall;
   if (/ssh|sshd|root login|password.*auth/i.test(lower)) return PLAYBOOKS.ssh;
