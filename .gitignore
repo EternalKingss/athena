@@ -7,7 +7,9 @@ data/memory/summary.md
 data/memory/*.db
 data/memory/*.bak.*
 data/memory/embeddings.jsonl
+data/memory/machines/
 data/sessions/*.jsonl
+data/sessions/audit/
 
 # Logs and temp
 debug.log

@@ -147,7 +147,7 @@ async function* openaiStream(messages, tools, base, key) {
     if (!r.ok) {
       const errText = await r.text();
       // 400 with tool-related error: fall back to no-tools (not a retryable condition)
-      if (r.status === 400 || /tool|function/i.test(errText)) {
+      if (r.status === 400 && /tool|function/i.test(errText)) {
         const body2 = { model: state.activeModel, messages, stream: true };
         r = await fetch(`${base}/chat/completions`, {
           method: 'POST',
