@@ -9,10 +9,9 @@ import { compressOutput } from './compress.mjs';
 // These are scoped to the MAIN agent only.
 // Background agents get their own isolated todos (passed via turn() closure).
 let SESSION_TODOS = [];
-export let _requestUserInput = null; // set by CLI or UI runner
+let _requestUserInput = null; // set by CLI or UI runner
 
 export function setRequestUserInput(fn) { _requestUserInput = fn; }
-export function getSessionTodos() { return SESSION_TODOS; }
 export function setSessionTodos(t) { SESSION_TODOS = t; }
 
 // Background agents get a no-op clarify so they never block waiting for user input
@@ -24,7 +23,7 @@ const COMPRESS_AT        = 40;
 const COMPRESS_KEEP_START = 4;
 const COMPRESS_KEEP_END   = 10;
 
-export async function maybeCompress(messages, emit, currentTodos = []) {
+async function maybeCompress(messages, emit, currentTodos = []) {
   if (messages.length < COMPRESS_AT) return;
   const start  = messages.slice(0, COMPRESS_KEEP_START);
   const end    = messages.slice(-COMPRESS_KEEP_END);

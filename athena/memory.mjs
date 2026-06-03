@@ -10,7 +10,7 @@ import { embedAndStore, extractTags } from './embed.mjs';
 const DELIM = '\n\x15\n';
 
 // ---- Memory file helpers ----
-function readEntries(file) {
+export function readEntries(file) {
   if (!existsSync(file)) return [];
   const raw = readFileSync(file, 'utf8').trim();
   return raw ? raw.split(DELIM).map(e => e.trim()).filter(Boolean) : [];

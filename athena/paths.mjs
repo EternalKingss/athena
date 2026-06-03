@@ -3,8 +3,8 @@ import { mkdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const HERE = dirname(fileURLToPath(import.meta.url));
-export const ROOT = resolve(HERE, '..');
+const HERE = dirname(fileURLToPath(import.meta.url));
+const ROOT = resolve(HERE, '..');
 
 export const PATHS = {
   env:      join(ROOT, 'config', '.env'),
@@ -12,7 +12,7 @@ export const PATHS = {
   agentMem: join(ROOT, 'data', 'memory', 'athena.md'),
   userMem:  join(ROOT, 'data', 'memory', 'user.md'),
   summary:  join(ROOT, 'data', 'memory', 'summary.md'),
-sessDir:  join(ROOT, 'data', 'sessions'),
+  sessDir:  join(ROOT, 'data', 'sessions'),
   skills:   join(ROOT, 'skills'),
 };
 

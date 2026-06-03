@@ -15,8 +15,6 @@ let nextId = 1;
 const workspace = {};
 
 // ---- Pool accessors ----
-export function getPool() { return pool; }
-
 export function listAgents() {
   return [...pool.values()].map(a => ({
     id:        a.id,

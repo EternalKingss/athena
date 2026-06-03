@@ -8,7 +8,7 @@ import { NAME, MODEL, CURATED_MODELS, state } from './config.mjs';
 import { PATHS } from './paths.mjs';
 import { systemPrompt } from './personality.mjs';
 import { turn, runTask, setRequestUserInput } from './core.mjs';
-import { saveAndSummarize } from './memory.mjs';
+import { saveAndSummarize, readEntries } from './memory.mjs';
 
 const execAsync = promisify(exec);
 
@@ -36,7 +36,7 @@ function parseJSON(body, res) {
   }
 }
 
-export const sseClients = new Set();
+const sseClients = new Set();
 export function broadcast(event) {
   const data = 'data: ' + JSON.stringify(event) + '\n\n';
   for (const res of sseClients) {
@@ -315,6 +315,11 @@ function buildScript(agentName) {
   ].join('\n');
 }
 
+function resetMessages(arr) {
+  arr.length = 0;
+  arr.push({ role: 'system', content: systemPrompt() });
+}
+
 export async function serveUI(messages) {
   const port = await getFreePort();
   process.env.ATHENA_UI = '1';
@@ -392,16 +397,13 @@ export async function serveUI(messages) {
       broadcast({ type: 'model_changed', model: state.activeModel }); return;
     }
     if (req.url === '/clear' && req.method === 'POST') {
-      messages.length = 0; messages.push({ role: 'system', content: systemPrompt() });
+      resetMessages(messages);
       res.writeHead(200); res.end(); return;
     }
     if (req.url === '/memory' && req.method === 'GET') {
-      const { existsSync: ex, readFileSync: rf } = await import('node:fs');
-      const DELIM = '\n' + String.fromCharCode(21) + '\n';
-      const readMem = f => ex(f) ? rf(f,'utf8').trim().split(DELIM).map(c=>({type:'memory',content:c.trim()})).filter(m=>m.content) : [];
-      const { PATHS: P } = await import('./paths.mjs');
+      const toItems = f => readEntries(f).map(content => ({ type: 'memory', content }));
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify([...readMem(P.agentMem), ...readMem(P.userMem)])); return;
+      res.end(JSON.stringify([...toItems(PATHS.agentMem), ...toItems(PATHS.userMem)])); return;
     }
     res.writeHead(404); res.end();
   });
@@ -422,7 +424,7 @@ export async function serveUI(messages) {
     const inp = await nextInput();
     if (!inp) continue;
     if (inp === '/forget') {
-      messages.length = 0; messages.push({ role: 'system', content: systemPrompt() });
+      resetMessages(messages);
       broadcast({ type: 'system', text: 'Context cleared.' }); broadcast({ type: 'done' }); continue;
     }
     if (inp === '/mem') {

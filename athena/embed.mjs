@@ -33,7 +33,7 @@ function loadAll() {
 }
 
 // ---- Store a new embedding entry ----
-export async function storeEmbedding({ id, text, type, tags = [], embedding }) {
+async function storeEmbedding({ id, text, type, tags = [], embedding }) {
   const entry = {
     id:         id || `${Date.now()}_${Math.random().toString(36).slice(2,7)}`,
     text:       text.slice(0, 500), // cap stored text length
@@ -58,7 +58,7 @@ export async function embedAndStore({ text, type, tags = [], id }) {
 }
 
 // ---- Semantic search: return top K most similar entries ----
-export async function searchSimilar(query, topK = 5, filterType = null) {
+async function searchSimilar(query, topK = 5, filterType = null) {
   let queryVec;
   try { queryVec = await generateEmbedding(query); }
   catch { return []; }
