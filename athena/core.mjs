@@ -10,9 +10,13 @@ import { compressOutput } from './compress.mjs';
 // Background agents get their own isolated todos (passed via turn() closure).
 let SESSION_TODOS = [];
 let _requestUserInput = null; // set by CLI or UI runner
+let _interrupted = false;
+let _turnActive   = false;
 
 export function setRequestUserInput(fn) { _requestUserInput = fn; }
 export function setSessionTodos(t) { SESSION_TODOS = t; }
+export function setInterrupt() { if (_turnActive) _interrupted = true; }
+export function isActive() { return _turnActive; }
 
 // Background agents get a no-op clarify so they never block waiting for user input
 const _noopInput = async (question) => `(background agent — cannot ask user: ${question})`;
@@ -49,6 +53,7 @@ async function maybeCompress(messages, emit, currentTodos = []) {
 // ---- Core turn loop ----
 // opts.isolated = true → use private todos + no-op clarify (for background agents)
 export async function turn(messages, emit, opts = {}) {
+  if (!opts.isolated) { _turnActive = true; _interrupted = false; }
   emit({ type: 'status', text: 'thinking' });
 
   // Isolated agents get their own todo list and a no-op input handler
@@ -102,7 +107,7 @@ export async function turn(messages, emit, opts = {}) {
     }
     messages.push(msg);
 
-    if (!msg.tool_calls?.length) { emit({ type: 'done' }); return; }
+    if (!msg.tool_calls?.length) { if (!opts.isolated) _turnActive = false; emit({ type: 'done' }); return; }
     toolIterations++;
 
     // ---- Execute tool calls ----
@@ -143,7 +148,33 @@ export async function turn(messages, emit, opts = {}) {
       toolResults.push({ role: 'tool', tool_call_id: call.id, content: compressed });
     }
     messages.push(...toolResults);
+
+    // Check for interrupt signal (main agent only)
+    if (_interrupted && !opts.isolated) {
+      _interrupted = false;
+      _turnActive  = false;
+      emit({ type: 'system', text: 'Interrupted — summarising...' });
+      messages.push({ role: 'user', content: 'You were interrupted mid-task. Briefly summarise: what did you accomplish so far, and what was still left to do?' });
+      let summary = '';
+      try {
+        for await (const chunk of chatStream(messages, [])) {
+          const delta = chunk.choices?.[0]?.delta;
+          if (delta?.content) {
+            if (!summary) emit({ type: 'stream_start' });
+            summary += delta.content;
+            emit({ type: 'token', content: delta.content });
+          }
+        }
+      } catch { /* non-fatal */ }
+      if (summary) {
+        emit({ type: 'stream_end' });
+        messages.push({ role: 'assistant', content: summary });
+      }
+      emit({ type: 'done' });
+      return;
+    }
   }
+  if (!opts.isolated) _turnActive = false;
 }
 
 // ---- CLI approval helper ----
