@@ -7,11 +7,14 @@ const execAsync = promisify(exec);
 const isWin = process.platform === 'win32';
 const isMac = process.platform === 'darwin';
 
-async function probe(cmd) {
+async function probe(cmd, label) {
   try {
     const { stdout } = await execAsync(cmd, { timeout: 8000 });
     return stdout.trim();
-  } catch { return ''; }
+  } catch (e) {
+    if (label && process.env.DEBUG) console.debug(`[triage:${label}] ${e.code || e.message}`);
+    return '';
+  }
 }
 
 function hasTool(sec, name) {
@@ -26,13 +29,13 @@ export async function runBootTriage() {
   // ---- Firewall ----
   let fwStatus = 'unknown';
   if (isWin) {
-    const out = await probe('netsh advfirewall show allprofiles state 2>nul');
+    const out = await probe('netsh advfirewall show allprofiles state 2>nul', 'firewall');
     fwStatus = /\bON\b/i.test(out) ? 'enabled' : 'disabled';
   } else if (isMac) {
-    const out = await probe('/usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate 2>/dev/null');
+    const out = await probe('/usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate 2>/dev/null', 'firewall');
     fwStatus = /enabled/i.test(out) ? 'enabled' : 'disabled';
   } else if (hasTool(sec, 'ufw')) {
-    const out = await probe('ufw status 2>/dev/null | head -1');
+    const out = await probe('ufw status 2>/dev/null | head -1', 'firewall-ufw');
     fwStatus = /active/i.test(out) ? 'active' : 'inactive';
   } else if (hasTool(sec, 'iptables') || hasTool(sec, 'nftables') || hasTool(sec, 'firewalld')) {
     fwStatus = 'configured';
@@ -65,14 +68,14 @@ export async function runBootTriage() {
 
   // ---- fail2ban (Linux only) ----
   if (!isWin && !isMac && hasTool(sec, 'fail2ban')) {
-    const out     = await probe('fail2ban-client status 2>/dev/null | head -3');
+    const out     = await probe('fail2ban-client status 2>/dev/null | head -3', 'fail2ban');
     const running = /jail list|number of jail/i.test(out);
     checks.push({ name: 'fail2ban', status: running ? 'ok' : 'warn', detail: running ? 'running' : 'installed but not running' });
   }
 
   // ---- ClamAV ----
   if (hasTool(sec, 'clamscan') || hasTool(sec, 'clamd')) {
-    const out   = await probe('clamscan --version 2>/dev/null | head -1');
+    const out   = await probe('clamscan --version 2>/dev/null | head -1', 'clamav');
     const year  = new Date().getFullYear();
     const fresh = out.includes(String(year)) || out.includes(String(year - 1));
     checks.push({
@@ -84,7 +87,7 @@ export async function runBootTriage() {
 
   // ---- SSH exposure ----
   if (!isWin) {
-    const out = await probe("ss -tlnp 2>/dev/null | grep -E ':22 |:22$' | head -3 || netstat -an 2>/dev/null | grep -E '\\.22\\s|LISTEN' | grep ':22' | head -3");
+    const out = await probe("ss -tlnp 2>/dev/null | grep -E ':22 |:22$' | head -3 || netstat -an 2>/dev/null | grep -E '\\.22\\s|LISTEN' | grep ':22' | head -3", 'ssh');
     if (out) {
       checks.push({ name: 'SSH', status: 'warn', detail: 'Port 22 listening — verify key-based auth is enforced' });
     }
@@ -92,7 +95,7 @@ export async function runBootTriage() {
 
   // ---- Pending system updates (Linux only) ----
   if (!isWin && !isMac) {
-    const aptOut = await probe('apt list --upgradable 2>/dev/null | tail -n +2 | wc -l');
+    const aptOut = await probe('apt list --upgradable 2>/dev/null | tail -n +2 | wc -l', 'updates');
     if (aptOut) {
       const pending = parseInt(aptOut, 10) || 0;
       checks.push({

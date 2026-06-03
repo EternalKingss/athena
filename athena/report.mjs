@@ -52,13 +52,19 @@ export async function generateSystemReport() {
 }
 
 export async function generateSecurityReport() {
-  const [threat, triage] = await Promise.all([assessThreatSurface(), runBootTriage()]);
+  const [threatResult, triageResult] = await Promise.allSettled([assessThreatSurface(), runBootTriage()]);
+  const threatSection = threatResult.status === 'fulfilled'
+    ? formatThreatReport(threatResult.value)
+    : `## Threat Surface Assessment\n\n⚠ Failed to assess: ${threatResult.reason?.message || 'unknown error'}`;
+  const triageSection = triageResult.status === 'fulfilled'
+    ? formatTriageReport(triageResult.value)
+    : `## Boot Triage\n\n⚠ Failed to run: ${triageResult.reason?.message || 'unknown error'}`;
   return [
     '# Athena Security Report',
     `*${new Date().toLocaleString()}*`,
     '',
-    formatThreatReport(threat),
-    formatTriageReport(triage),
+    threatSection,
+    triageSection,
   ].join('\n');
 }
 
@@ -68,12 +74,16 @@ export async function generateNetworkReport() {
 }
 
 export async function generateFullReport() {
-  const [sys, sec, net] = await Promise.all([
+  const labels = ['System', 'Security', 'Network'];
+  const results = await Promise.allSettled([
     generateSystemReport(),
     generateSecurityReport(),
     generateNetworkReport(),
   ]);
-  return [sys, '\n---\n', sec, '\n---\n', net].join('\n');
+  return results.map((r, i) => {
+    if (r.status === 'fulfilled') return r.value;
+    return `# Athena ${labels[i]} Report\n\n⚠ Failed to generate: ${r.reason?.message || 'unknown error'}`;
+  }).join('\n\n---\n\n');
 }
 
 export async function handleReportTool(args) {

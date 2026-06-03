@@ -80,6 +80,7 @@ async function withRetry(fn, maxAttempts = 4) {
     catch (err) {
       if (attempt === maxAttempts || !RETRYABLE.has(err.status)) throw err;
       const wait = err.retryAfter != null ? err.retryAfter * 1000 : delay;
+      console.debug(`[api] HTTP ${err.status} — retrying in ${Math.round(wait / 1000)}s (attempt ${attempt}/${maxAttempts})`);
       await new Promise(r => setTimeout(r, wait));
       delay = Math.min(delay * 2, 32000);
     }

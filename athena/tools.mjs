@@ -217,7 +217,7 @@ export async function runTool(name, args, preApproved, sessionTodos, setSessionT
 
   if (name === 'network_scan') {
     const { handleNetworkScanTool } = await import('./network.mjs');
-    return handleNetworkScanTool(args);
+    return await handleNetworkScanTool(args);
   }
 
   if (name === 'generate_report') {

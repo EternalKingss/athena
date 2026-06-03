@@ -7,11 +7,14 @@ const execAsync = promisify(exec);
 const isWin = process.platform === 'win32';
 const isMac = process.platform === 'darwin';
 
-async function probe(cmd) {
+async function probe(cmd, label) {
   try {
     const { stdout } = await execAsync(cmd, { timeout: 10000 });
     return stdout.trim();
-  } catch { return ''; }
+  } catch (e) {
+    if (label && process.env.DEBUG) console.debug(`[threat:${label}] ${e.code || e.message}`);
+    return '';
+  }
 }
 
 // Ports that deserve a finding even if common
@@ -26,9 +29,9 @@ function riskLevel(score) {
 async function getListeningPorts() {
   let out = '';
   if (isWin) {
-    out = await probe('netstat -an 2>nul | findstr LISTENING');
+    out = await probe('netstat -an 2>nul | findstr LISTENING', 'ports');
   } else {
-    out = await probe('ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null');
+    out = await probe('ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null', 'ports');
   }
   return out.split('\n')
     .filter(l => isWin ? Boolean(l.trim()) : l.includes('LISTEN'))
@@ -42,27 +45,27 @@ async function getUnusualSUID() {
   if (isWin || isMac) return [];
   // Known-safe SUID binaries (partial match is fine — we just want to skip the obvious ones)
   const SAFE = new Set(['sudo', 'su', 'passwd', 'gpasswd', 'newgrp', 'chsh', 'chfn', 'mount', 'umount', 'ping', 'unix_chkpwd', 'pkexec', 'crontab', 'at']);
-  const out  = await probe('find /usr /bin /sbin /usr/local -perm /4000 -type f 2>/dev/null | head -40');
+  const out  = await probe('find /usr /bin /sbin /usr/local -perm /4000 -type f 2>/dev/null | head -40', 'suid');
   return out.split('\n').filter(Boolean)
     .filter(p => !SAFE.has(p.split('/').pop()));
 }
 
 async function getWorldWritableDirs() {
   if (isWin || isMac) return [];
-  const out = await probe("find /var /etc /srv -type d -perm -002 -not -path '*/tmp*' 2>/dev/null | head -20");
+  const out = await probe("find /var /etc /srv -type d -perm -002 -not -path '*/tmp*' 2>/dev/null | head -20", 'world-writable');
   return out.split('\n').filter(Boolean);
 }
 
 async function getRunningServices() {
   if (isWin) {
-    const out = await probe('sc query type= all state= running 2>nul | findstr SERVICE_NAME');
+    const out = await probe('sc query type= all state= running 2>nul | findstr SERVICE_NAME', 'services');
     return out.split('\n').map(l => l.replace(/SERVICE_NAME:\s*/, '').trim()).filter(Boolean);
   }
   if (isMac) {
-    const out = await probe("launchctl list 2>/dev/null | awk 'NR>1 && $3 != \"\" {print $3}' | head -30");
+    const out = await probe("launchctl list 2>/dev/null | awk 'NR>1 && $3 != \"\" {print $3}' | head -30", 'services');
     return out.split('\n').filter(Boolean);
   }
-  const out = await probe("systemctl list-units --type=service --state=running --no-legend 2>/dev/null | awk '{print $1}' | head -40");
+  const out = await probe("systemctl list-units --type=service --state=running --no-legend 2>/dev/null | awk '{print $1}' | head -40", 'services');
   return out.split('\n').filter(Boolean);
 }
 
