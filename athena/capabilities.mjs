@@ -128,7 +128,6 @@ async function detect() {
   // Bundled tools living on the drive itself (in runtime/)
   const bundled = {
     python: existsSync(PATHS.python),
-    lokiRs: existsSync(PATHS.lokiRs),
     lokiPy: existsSync(PATHS.lokiPy),
   };
 
@@ -175,8 +174,7 @@ export function capabilitiesSummary() {
   const b = caps.bundled;
   const bundledList = [
     b.python ? 'python (drive)' : null,
-    b.lokiRs ? 'loki-rs (drive)' : null,
-    b.lokiPy ? 'loki-py (drive)' : null,
+    b.lokiPy ? 'loki (drive)'   : null,
   ].filter(Boolean);
   if (bundledList.length) lines.push('  Bundled on drive: ' + bundledList.join(', '));
 

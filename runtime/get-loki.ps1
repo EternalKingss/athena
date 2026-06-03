@@ -1,45 +1,37 @@
-# get-loki.ps1 — download Loki-RS malware scanner binary onto the drive
-# Usage: .\get-loki.ps1
-# Drops loki-rs.exe into runtime\<arch>\
-
-param(
-  [string]$Version = "0.4.0"
-)
+# get-loki.ps1 — install Loki malware scanner using the drive's portable Python
+# Run get-python.ps1 first if you haven't already.
 
 $Arch = "win-x64"
 if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { $Arch = "win-arm64" }
 
-$Triple     = if ($Arch -eq "win-arm64") { "aarch64-pc-windows-msvc" } else { "x86_64-pc-windows-msvc" }
-$FileName   = "loki-rs-$Triple.zip"
-$Url        = "https://github.com/Neo23x0/Loki-RS/releases/download/v$Version/$FileName"
-$RuntimeDir = Join-Path $PSScriptRoot $Arch
-$TargetExe  = Join-Path $RuntimeDir "loki-rs.exe"
-$TmpZip     = Join-Path $RuntimeDir "_loki_tmp.zip"
+$RuntimeDir = $PSScriptRoot
+$RootDir    = Split-Path $RuntimeDir -Parent
+$Python     = Join-Path $RuntimeDir "$Arch\python\python.exe"
+$Pip        = Join-Path $RuntimeDir "$Arch\python\Scripts\pip.exe"
+$LokiDir    = Join-Path $RootDir "tools\loki"
 
-if (Test-Path $TargetExe) {
-  Write-Host "  Loki-RS already present at $TargetExe"
+if (-not (Test-Path $Python)) {
+  Write-Host "  Portable Python not found. Run runtime\get-python.ps1 first."
+  exit 1
+}
+
+if (Test-Path (Join-Path $LokiDir "loki.py")) {
+  Write-Host "  Loki already installed at $LokiDir"
   exit 0
 }
 
-Write-Host "  Downloading Loki-RS v$Version for $Arch..."
-New-Item -ItemType Directory -Force -Path $RuntimeDir | Out-Null
-try {
-  Invoke-WebRequest -Uri $Url -OutFile $TmpZip -UseBasicParsing
-} catch {
-  Write-Host "  ERROR: $_"; exit 1
-}
+Write-Host "  Cloning Loki..."
+New-Item -ItemType Directory -Force -Path (Join-Path $RootDir "tools") | Out-Null
+git clone --depth 1 https://github.com/Neo23x0/Loki $LokiDir
+if ($LASTEXITCODE -ne 0) { Write-Host "  ERROR: git clone failed"; exit 1 }
 
-Write-Host "  Extracting..."
-$TmpDir = Join-Path $RuntimeDir "_loki_extract"
-New-Item -ItemType Directory -Force -Path $TmpDir | Out-Null
-Expand-Archive -Path $TmpZip -DestinationPath $TmpDir -Force
-$Exe = Get-ChildItem -Path $TmpDir -Filter "loki-rs.exe" -Recurse | Select-Object -First 1
-if ($Exe) {
-  Copy-Item $Exe.FullName $TargetExe -Force
-} else {
-  Write-Host "  ERROR: loki-rs.exe not found in archive"; exit 1
-}
-Remove-Item $TmpDir -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item $TmpZip -Force          -ErrorAction SilentlyContinue
+Write-Host "  Installing dependencies into drive Python..."
+& $Pip install --quiet -r (Join-Path $LokiDir "requirements.txt")
+if ($LASTEXITCODE -ne 0) { Write-Host "  ERROR: pip install failed"; exit 1 }
 
-Write-Host "  Loki-RS ready at: $TargetExe"
+Write-Host ""
+Write-Host "  Loki ready. Run a scan:"
+Write-Host "    $Python $LokiDir\loki.py --path C:\target"
+Write-Host ""
+Write-Host "  First run — update signatures:"
+Write-Host "    $Python $LokiDir\loki.py --update"

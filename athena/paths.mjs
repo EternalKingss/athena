@@ -30,7 +30,6 @@ export const PATHS = {
   python:     isWin ? join(RUNTIME, 'python', 'python.exe')     : join(RUNTIME, 'python', 'bin', 'python3'),
   pythonBin:  isWin ? join(RUNTIME, 'python')                   : join(RUNTIME, 'python', 'bin'),
   pythonPkg:  isWin ? join(RUNTIME, 'python', 'Scripts')        : join(RUNTIME, 'python', 'bin'),
-  lokiRs:     isWin ? join(RUNTIME, 'loki-rs.exe')              : join(RUNTIME, 'loki-rs'),
   lokiPy:     join(ROOT, 'tools', 'loki', 'loki.py'),
 };
 

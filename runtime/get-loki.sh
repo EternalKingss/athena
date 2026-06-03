@@ -1,9 +1,9 @@
 #!/bin/bash
-# get-loki.sh — download Loki-RS malware scanner binary onto the drive
-# Drops loki-rs into runtime/<arch>/
+# get-loki.sh — install Loki malware scanner using the drive's portable Python
+# Run get-python.sh first if you haven't already.
 
-VERSION="0.4.0"
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(dirname "$DIR")"
 
 PLATFORM="$(uname -s)"
 MACHINE="$(uname -m)"
@@ -11,49 +11,39 @@ MACHINE="$(uname -m)"
 if [ "$PLATFORM" = "Darwin" ]; then
   ARCH_DIR="mac-x64"
   [ "$MACHINE" = "arm64" ] && ARCH_DIR="mac-arm64"
-  TRIPLE="x86_64-apple-darwin"
-  [ "$MACHINE" = "arm64" ] && TRIPLE="aarch64-apple-darwin"
 else
   ARCH_DIR="linux-x64"
   [ "$MACHINE" = "aarch64" ] && ARCH_DIR="linux-arm64"
-  TRIPLE="x86_64-unknown-linux-musl"
-  [ "$MACHINE" = "aarch64" ] && TRIPLE="aarch64-unknown-linux-musl"
 fi
 
-RUNTIME_DIR="$DIR/$ARCH_DIR"
-TARGET="$RUNTIME_DIR/loki-rs"
-FILENAME="loki-rs-$TRIPLE.tar.gz"
-URL="https://github.com/Neo23x0/Loki-RS/releases/download/v$VERSION/$FILENAME"
-TMP_FILE="$RUNTIME_DIR/_loki_tmp.tar.gz"
+PYTHON="$DIR/$ARCH_DIR/python/bin/python3"
+PIP="$DIR/$ARCH_DIR/python/bin/pip3"
+LOKI_DIR="$ROOT/tools/loki"
 
-if [ -x "$TARGET" ]; then
-  echo "  Loki-RS already present at $TARGET"
+if [ ! -x "$PYTHON" ]; then
+  echo "  Portable Python not found. Run runtime/get-python.sh first."
+  exit 1
+fi
+
+if [ -f "$LOKI_DIR/loki.py" ]; then
+  echo "  Loki already installed at $LOKI_DIR"
   exit 0
 fi
 
-mkdir -p "$RUNTIME_DIR"
-echo "  Downloading Loki-RS v$VERSION for $ARCH_DIR..."
-if command -v curl &>/dev/null; then
-  curl -L -o "$TMP_FILE" "$URL" || { echo "  Download failed"; exit 1; }
-elif command -v wget &>/dev/null; then
-  wget -O "$TMP_FILE" "$URL"    || { echo "  Download failed"; exit 1; }
-else
-  echo "  ERROR: need curl or wget"; exit 1
-fi
+echo "  Cloning Loki..."
+mkdir -p "$ROOT/tools"
+git clone --depth 1 https://github.com/Neo23x0/Loki "$LOKI_DIR" || {
+  echo "  ERROR: git clone failed"; exit 1
+}
 
-echo "  Extracting..."
-TMP_DIR="$RUNTIME_DIR/_loki_extract"
-mkdir -p "$TMP_DIR"
-tar -xzf "$TMP_FILE" -C "$TMP_DIR"
+echo "  Installing dependencies into drive Python..."
+"$PIP" install --quiet -r "$LOKI_DIR/requirements.txt" || {
+  echo "  ERROR: pip install failed"; exit 1
+}
 
-BINARY="$(find "$TMP_DIR" -name 'loki-rs' -type f | head -1)"
-if [ -n "$BINARY" ]; then
-  cp "$BINARY" "$TARGET"
-  chmod +x "$TARGET"
-else
-  echo "  ERROR: loki-rs binary not found in archive"; exit 1
-fi
-rm -rf "$TMP_DIR" "$TMP_FILE"
-
-echo "  Loki-RS ready at: $TARGET"
-"$TARGET" --version 2>/dev/null || true
+echo ""
+echo "  Loki ready. Run a scan:"
+echo "    $PYTHON $LOKI_DIR/loki.py --path /target/directory"
+echo ""
+echo "  First run — update signatures:"
+echo "    $PYTHON $LOKI_DIR/loki.py --update"

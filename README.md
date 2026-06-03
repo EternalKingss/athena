@@ -51,8 +51,8 @@ powershell -ExecutionPolicy Bypass -File runtime\get-python.ps1
 
 Drops into `runtime/<arch>/python/`. Any `python` or `pip` command Athena runs automatically uses the drive's Python first.
 
-#### Optional: Loki-RS malware scanner (no host install)
-Bundles the [Loki-RS](https://github.com/Neo23x0/Loki-RS) YARA + IOC scanner binary on the drive.
+#### Optional: Loki malware scanner (no host install)
+Installs [Loki](https://github.com/Neo23x0/Loki) (YARA + IOC scanner) into the drive's Python. Requires portable Python above.
 
 ```bash
 # Linux / macOS
@@ -62,7 +62,7 @@ bash runtime/get-loki.sh
 powershell -ExecutionPolicy Bypass -File runtime\get-loki.ps1
 ```
 
-Drops into `runtime/<arch>/loki-rs[.exe]`. Ask Athena to `load_skill loki-scan` for usage.
+Clones Loki into `tools/loki/`, dependencies install into the drive's Python. Ask Athena to `load_skill loki-scan` for usage.
 
 You only need the platforms you plug into.
 
