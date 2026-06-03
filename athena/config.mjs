@@ -15,7 +15,7 @@ function loadEnv(path) {
   return cfg;
 }
 
-export const CFG              = loadEnv(PATHS.env);
+const CFG                     = loadEnv(PATHS.env);
 export const API_KEY          = CFG.OPENAI_API_KEY    || process.env.OPENAI_API_KEY    || '';
 export const MODEL            = CFG.OPENAI_MODEL      || 'gpt-4o';
 export const BASE             = CFG.OPENAI_BASE_URL   || 'https://api.openai.com/v1';

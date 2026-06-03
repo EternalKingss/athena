@@ -6,7 +6,7 @@ import {
 } from './config.mjs';
 
 // ---- Provider detection ----
-export function resolveProvider() {
+function resolveProvider() {
   const m = state.activeModel;
   if (m.startsWith('claude-'))
     return { provider: 'anthropic', base: ANTHROPIC_BASE, key: ANTHROPIC_KEY };
