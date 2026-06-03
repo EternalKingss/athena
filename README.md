@@ -11,7 +11,7 @@ Switch between providers from the UI dropdown at any time, no restart needed:
 | Provider | Models | Key needed |
 |----------|--------|-----------|
 | **OpenAI** | gpt-5.5, gpt-5.4-mini, gpt-4o, gpt-4o-mini | `OPENAI_API_KEY` |
-| **Anthropic** | claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5 | `ANTHROPIC_API_KEY` |
+| **Anthropic** | claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5-20251001 | `ANTHROPIC_API_KEY` |
 | **NVIDIA NIM** | Nemotron-Super-120B, DeepSeek-V4-Pro, Llama-3.3-70B, Qwen3-235B, Nemotron-Ultra-253B | `NVIDIA_API_KEY` |
 
 You only need keys for the providers you use. OpenAI is also required for semantic memory (embeddings) regardless of which model you chat with.
@@ -70,6 +70,7 @@ Athena opens in your browser. Type to talk. Use the dropdown to switch models.
 | `spawn_agent` | Launch a parallel background agent |
 | `workspace_read` / `workspace_write` | Share data between agents |
 | `load_skill` / `save_skill` / `update_skill` | Skill library management |
+| `machine_info` | Query detected machine capabilities. Pass `rescan:true` to re-probe. |
 
 ### Memory
 Two tiers:
@@ -81,6 +82,23 @@ Two tiers:
 - **Auto-compression** kicks in at 40 messages — the middle of the conversation is summarized into bullets, keeping the first 4 messages (system context) and last 10 (recent context). Your active task list is reinjected so nothing is lost.
 - **Tool output compression** — large tool results are automatically compressed before they enter the context window. JSON keeps its full schema but truncates long values; logs deduplicate repeated lines; code has comments stripped; all types get a head+tail treatment if still large. Triggers at 1,500 chars, hard cap at 8,000. The UI always shows you the full raw output — only the LLM gets the compressed version.
 - **50 tool-call cap** per turn prevents runaway loops.
+
+### Machine capabilities
+When Athena boots, she runs a background scan of the host machine and injects the results into her system prompt. She detects:
+
+- **Languages** — Python, Ruby, PHP, Perl, Lua, Julia, R, Swift, Kotlin, Scala, Elixir, Haskell, Zig
+- **Compilers / Build** — gcc, clang, javac, rustc, Go, .NET, tsc, Maven, Gradle, CMake, Make, Ninja, Bazel
+- **Package managers** — npm, pnpm, yarn, bun, deno, pip, uv, poetry, gem, composer, brew, apt, yum, dnf, pacman, nix, winget, choco, scoop
+- **Containers** — Docker, docker-compose, Podman, kubectl, Helm, minikube, kind
+- **Browsers** — Chrome, Chromium, Firefox, Brave, Edge, Opera, Safari, lynx
+- **IDEs / Editors** — VS Code, Cursor, Zed, vim, nvim, emacs, IntelliJ, PyCharm, Helix, Sublime
+- **Databases** — MySQL, PostgreSQL, SQLite, Redis, MongoDB, InfluxDB, DuckDB
+- **DevOps / Cloud** — git, gh, aws, az, gcloud, terraform, ansible, pulumi, vault, fly, vercel, wrangler
+- **Utilities** — curl, wget, jq, ffmpeg, tmux, fzf, ripgrep, bat, rsync, openssl, gpg, sops, age
+- **GPUs** — NVIDIA (nvidia-smi), AMD (rocm-smi), macOS (system_profiler), Linux (lspci), Windows (wmic)
+- **MCP servers** — scans Claude Desktop, Cursor, and project-level `.mcp.json` configs
+
+The scan is non-blocking — Athena is ready immediately and the machine block appears in the system prompt as soon as the scan resolves (before the first response). Call `machine_info` to see the full result, or pass `rescan:true` to re-probe after installing something new.
 
 ### Skills
 Athena builds her own playbook. When she solves something non-trivial, she saves it as a skill in `skills/`. Skills are plain markdown with YAML frontmatter — hand-editable, version-controlled, loaded on demand.
@@ -111,6 +129,7 @@ athena/
   athena.mjs      entry point (CLI + UI)
   api.mjs         LLM API calls — OpenAI, Anthropic, NVIDIA streaming
   compress.mjs    tool output compression (JSON, code, logs, text)
+  capabilities.mjs machine capability detection at startup
   config.mjs      env loading, constants, model lists
   core.mjs        turn loop, task runner, context compression
   embed.mjs       semantic embeddings, cosine similarity search
@@ -138,4 +157,5 @@ athena/
 | **2** | Web fetch, live web search, patch/diff editing, multi-step task runner | ✓ done |
 | **3** | Rolling session summaries, session save/resume, smarter context management | ✓ done |
 | **4** | Modular architecture, multi-provider (Anthropic + NVIDIA), semantic recall + embeddings | ✓ done |
-| **5** | Multi-agent system, self-building skill library, full web UI, security hardening, tool output compression, codebase cleanup | ✅ current |
+| **5** | Multi-agent system, self-building skill library, full web UI, security hardening, tool output compression, codebase cleanup | ✓ done |
+| **6** | Machine capability detection — languages, compilers, GPUs, containers, browsers, IDEs, databases, MCP servers detected at boot and injected into system prompt | ✅ current |
