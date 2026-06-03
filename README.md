@@ -139,4 +139,3 @@ athena/
 | **3** | Rolling session summaries, session save/resume, smarter context management | ✓ done |
 | **4** | Modular architecture, multi-provider (Anthropic + NVIDIA), semantic recall + embeddings | ✓ done |
 | **5** | Multi-agent system, self-building skill library, full web UI, security hardening, tool output compression, codebase cleanup | ✅ current |
-| **6** | Passphrase-encrypted keys, agent memory sharing across sessions, offline model support | planned |
