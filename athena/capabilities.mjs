@@ -41,11 +41,13 @@ async function detectGPUs() {
   const isMac = process.platform === 'darwin';
   const isWin = process.platform === 'win32';
 
-  const nvOut = await probe('nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null');
-  if (nvOut) nvOut.split('\n').filter(Boolean).forEach(n => gpus.push('NVIDIA ' + n.trim()));
+  if (!isMac) {
+    const nvOut = await probe('nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null');
+    if (nvOut) nvOut.split('\n').filter(Boolean).forEach(n => gpus.push('NVIDIA ' + n.trim()));
 
-  const rocmOut = await probe('rocm-smi --showproductname 2>/dev/null | grep -i "gpu\\|card" | head -4');
-  if (rocmOut) rocmOut.split('\n').filter(Boolean).forEach(n => gpus.push('AMD ' + n.trim()));
+    const rocmOut = await probe('rocm-smi --showproductname 2>/dev/null | grep -i "gpu\\|card" | head -4');
+    if (rocmOut) rocmOut.split('\n').filter(Boolean).forEach(n => gpus.push('AMD ' + n.trim()));
+  }
 
   if (!gpus.length && isWin) {
     const wmicOut = await probe('wmic path win32_VideoController get Name /format:list 2>nul');
@@ -66,7 +68,7 @@ async function detectGPUs() {
     });
   }
 
-  if (!gpus.length) {
+  if (!gpus.length && !isMac && !isWin) {
     const lspciOut = await probe("lspci 2>/dev/null | grep -i 'vga\\|3d\\|display'");
     if (lspciOut) lspciOut.split('\n').filter(Boolean).forEach(n => gpus.push(n.trim()));
   }
@@ -139,7 +141,9 @@ async function detectSystemResources() {
     if (totalOut) ramTotal = Math.round(Number(totalOut) / 1e9 * 10) / 10 + ' GB';
     if (vmOut) {
       const pages = Number(vmOut.match(/(\d+)/)?.[1] || 0);
-      ramFree = Math.round(pages * 4096 / 1e9 * 10) / 10 + ' GB free';
+      const pageSizeOut = await probe('sysctl -n hw.pagesize 2>/dev/null');
+      const pageSize = Number(pageSizeOut) || 4096;
+      ramFree = Math.round(pages * pageSize / 1e9 * 10) / 10 + ' GB free';
     }
     cpuModel = cpuOut?.trim() || null;
     cpuCores = coresOut?.trim() || null;
@@ -193,10 +197,7 @@ function detectMCPServers() {
       const raw = JSON.parse(readFileSync(p, 'utf8'));
       const servers = raw.mcpServers || raw.servers || {};
       const names = Object.keys(servers);
-      if (names.length) {
-        const label = p.startsWith(home) ? p.replace(home, '~') : p;
-        names.forEach(n => found.push(`${n} (${label})`));
-      }
+      if (names.length) names.forEach(n => found.push(n));
     } catch { /* ignore parse errors */ }
   }
 
@@ -242,10 +243,12 @@ async function detect() {
   };
 }
 
+let _inflight = null;
 export async function detectCapabilities() {
   if (_cache) return _cache;
-  _cache = await detect();
-  return _cache;
+  if (_inflight) return _inflight;
+  _inflight = detect().then(result => { _cache = result; _inflight = null; return result; });
+  return _inflight;
 }
 
 export function getCachedCapabilities() {
@@ -254,6 +257,7 @@ export function getCachedCapabilities() {
 
 export function clearCapabilityCache() {
   _cache = null;
+  _inflight = null;
 }
 
 export function capabilitiesSummary() {

@@ -55,6 +55,7 @@ async function runCLI() {
   _globalEmit = cliEmit;
 
   const messages = freshMessages();
+  _activeMessages = messages;
   const rl  = readline.createInterface({ input: process.stdin, output: process.stdout });
   const ask = q => rl.question(q);
 
@@ -174,16 +175,18 @@ async function runCLI() {
 
 // ---- Entry point ----
 // Fire capability detection in the background — HDD-friendly, non-blocking.
-// capabilitiesSummary() returns '' until the cache populates, so turn 1 omits
-// the machine block. It appears automatically once the scan resolves (usually
-// before the first response is sent).
-detectCapabilities().catch(() => {});
+// When detection resolves we backfill messages[0] in case it was generated before
+// the cache was populated (e.g. user ran /forget within the first ~5 s).
+let _activeMessages = null;
+detectCapabilities()
+  .then(() => { if (_activeMessages?.[0]?.role === 'system') _activeMessages[0].content = systemPrompt(); })
+  .catch(() => {});
 
 if (UI_MODE) {
   _globalEmit = uiEmit;
-  const messages = freshMessages();
-  process.on('SIGINT', async () => { await saveAndSummarize(messages); process.exit(0); });
-  await serveUI(messages);
+  _activeMessages = freshMessages();
+  process.on('SIGINT', async () => { await saveAndSummarize(_activeMessages); process.exit(0); });
+  await serveUI(_activeMessages);
 } else {
   await runCLI();
 }
