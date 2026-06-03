@@ -9,36 +9,44 @@ const execAsync = promisify(exec);
 const isWin = process.platform === 'win32';
 const isMac = process.platform === 'darwin';
 
-async function probe(cmd) {
+async function probe(cmd, label) {
   try {
     const { stdout } = await execAsync(cmd, { timeout: 10000 });
     return stdout.trim();
-  } catch { return ''; }
+  } catch (e) {
+    if (label && process.env.DEBUG) console.debug(`[network:${label}] ${e.code || e.message}`);
+    return '';
+  }
 }
 
 async function getRoutes() {
-  if (isWin)  return probe('route print 0.0.0.0 2>nul');
-  if (isMac)  return probe('netstat -rn -f inet 2>/dev/null | head -25');
-  return probe('ip route 2>/dev/null || netstat -rn 2>/dev/null | head -25');
+  if (isWin)  return probe('route print 0.0.0.0 2>nul', 'routes');
+  if (isMac)  return probe('netstat -rn -f inet 2>/dev/null | head -25', 'routes');
+  return probe('ip route 2>/dev/null || netstat -rn 2>/dev/null | head -25', 'routes');
 }
 
 async function getDNSServers() {
   if (isWin) {
-    const out = await probe('ipconfig /all 2>nul');
+    const out = await probe('ipconfig /all 2>nul', 'dns');
     return out.split('\n')
       .filter(l => /DNS Server/i.test(l))
       .map(l => l.split(':').slice(1).join(':').trim())
       .filter(Boolean);
   }
   if (isMac) {
-    const out = await probe('scutil --dns 2>/dev/null | grep nameserver | head -5');
+    const out = await probe('scutil --dns 2>/dev/null | grep nameserver | head -5', 'dns');
     return out.split('\n').map(l => l.replace(/.*nameserver\[.*?\]\s*:\s*/, '').trim()).filter(Boolean);
   }
   if (existsSync('/etc/resolv.conf')) {
-    return readFileSync('/etc/resolv.conf', 'utf8')
-      .split('\n')
-      .filter(l => l.startsWith('nameserver'))
-      .map(l => l.replace('nameserver', '').trim());
+    try {
+      return readFileSync('/etc/resolv.conf', 'utf8')
+        .split('\n')
+        .filter(l => l.startsWith('nameserver'))
+        .map(l => l.replace('nameserver', '').trim());
+    } catch (e) {
+      if (process.env.DEBUG) console.debug(`[network:dns] resolv.conf read failed: ${e.message}`);
+      return [];
+    }
   }
   return [];
 }
@@ -46,9 +54,9 @@ async function getDNSServers() {
 async function getListeningPorts() {
   let out = '';
   if (isWin) {
-    out = await probe('netstat -an 2>nul | findstr LISTENING');
+    out = await probe('netstat -an 2>nul | findstr LISTENING', 'ports');
   } else {
-    out = await probe('ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null');
+    out = await probe('ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null', 'ports');
   }
   const ports = out.split('\n')
     .filter(l => isWin ? Boolean(l) : l.includes('LISTEN'))
@@ -115,7 +123,7 @@ export async function handleNetworkScanTool(args) {
     const caps    = getCachedCapabilities();
     const hasNmap = caps?.security?.some(s => s.toLowerCase().includes('nmap'));
     if (hasNmap) {
-      const nmapOut = await probe(`nmap -sV --open -T4 ${target} 2>/dev/null`);
+      const nmapOut = await probe(`nmap -sV --open -T4 ${target} 2>/dev/null`, 'nmap');
       lines.push(nmapOut || '  (no output)');
     } else {
       lines.push('  nmap not available — install it for deep port scanning.');

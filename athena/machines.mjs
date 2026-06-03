@@ -26,7 +26,9 @@ export async function saveFingerprint(caps) {
   try {
     await mkdir(MACHINES_DIR, { recursive: true });
     await writeFile(fingerprintPath(), JSON.stringify(snapshot, null, 2));
-  } catch {}
+  } catch (e) {
+    console.warn(`[machines] fingerprint save failed: ${e.message}`);
+  }
   return snapshot;
 }
 
