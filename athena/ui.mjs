@@ -37,13 +37,22 @@ function parseJSON(body, res) {
 }
 
 const sseClients = new Set();
+const _bootBuffer = []; // holds events emitted before browser connects
+const _bootInputQueue = []; // holds auto-boot messages queued before serveUI loop starts
+
 export function broadcast(event) {
   const data = 'data: ' + JSON.stringify(event) + '\n\n';
   for (const res of sseClients) {
     try { res.write(data); } catch { sseClients.delete(res); }
   }
 }
-export function uiEmit(event) { broadcast(event); }
+// Buffer events if no SSE client connected yet; drain when first client arrives
+export function uiEmit(event) {
+  if (sseClients.size === 0) { _bootBuffer.push(event); return; }
+  broadcast(event);
+}
+// Queue a message for Athena to respond to on first browser connect
+export function queueBootInput(text) { _bootInputQueue.push(text); }
 
 function getFreePort() {
   return new Promise((resolve, reject) => {
@@ -155,6 +164,14 @@ function buildHTML(agentName) {
     '.mem-empty{color:var(--dim2);text-align:center;padding:20px;font-size:12px}',
     '.agent-toast{position:fixed;bottom:80px;right:20px;background:var(--surface);border:1px solid var(--green-dim);color:var(--green);padding:10px 16px;border-radius:6px;font-size:12px;z-index:300;cursor:pointer;animation:toastIn .2s ease}',
     '@keyframes toastIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}',
+    '#progress-wrap{height:28px;padding:0 20px;display:none;align-items:center;gap:10px;background:var(--surface);border-bottom:1px solid var(--border);flex-shrink:0;overflow:hidden}',
+    '#progress-wrap.active{display:flex}',
+    '#progress-track{flex:1;height:3px;background:var(--border);border-radius:2px;overflow:hidden;position:relative}',
+    '#progress-fill{position:absolute;inset:0;background:linear-gradient(90deg,transparent 0%,var(--green) 50%,transparent 100%);background-size:200% 100%;animation:pshimmer 1.4s ease-in-out infinite;border-radius:2px}',
+    '@keyframes pshimmer{0%{background-position:200% center}100%{background-position:-200% center}}',
+    '#progress-wrap.stalled #progress-fill{background:linear-gradient(90deg,transparent 0%,var(--yellow) 50%,transparent 100%);background-size:200% 100%;animation:pshimmer 2.5s ease-in-out infinite}',
+    '#progress-label{font-size:10px;color:var(--dim2);letter-spacing:.05em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:340px;flex-shrink:0}',
+    '#progress-wrap.stalled #progress-label{color:var(--yellow)}',
     '</style></head><body>',
     '<div id="app">',
     '  <div id="header">',
@@ -169,6 +186,10 @@ function buildHTML(agentName) {
     '      <span class="tab-dot" style="background:var(--green-dim)"></span>' + N,
     '    </button>',
     '    <button id="spawn-btn" onclick="openSpawn()">+ New Agent</button>',
+    '  </div>',
+    '  <div id="progress-wrap">',
+    '    <div id="progress-track"><div id="progress-fill"></div></div>',
+    '    <div id="progress-label">thinking...</div>',
     '  </div>',
     '  <div id="todo-strip"><span id="todo-label">tasks</span></div>',
     '  <div id="messages"><div class="agent-pane active" data-id="main"></div></div>',
@@ -250,33 +271,46 @@ function buildScript(agentName) {
     '  const lbl=name==="run_shell"?(args.command||"").slice(0,80):name==="web_search"?args.query:name==="spawn_agent"?(args.name||""):args.path||args.key||name;',
     '  cmd.textContent=(icons[name]||">")+lbl;item.appendChild(cmd);list.appendChild(item);scroll(id);return item;',
     '}',
+    // Progress bar controls
+    'const progressWrap=document.getElementById("progress-wrap");',
+    'const progressLabel=document.getElementById("progress-label");',
+    'let _stallTimer=null;',
+    'const _toolIcons={run_shell:"$ ",web_search:"search: ",fetch_url:"fetch: ",read_file:"read: ",write_file:"write: ",edit_file:"edit: ",memory:"memory: ",recall:"recall: ",spawn_agent:"spawn: ",machine_info:"machine: ",boot_triage:"triage: ",network_scan:"network: "};',
+    'function progressShow(label){progressWrap.classList.add("active");progressWrap.classList.remove("stalled");progressLabel.textContent=label;clearTimeout(_stallTimer);_stallTimer=setTimeout(()=>{progressWrap.classList.add("stalled");progressLabel.textContent="taking a while\\u2026 use Stop if stuck";},30000);}',
+    'function progressUpdate(label){if(!progressWrap.classList.contains("active"))return;progressWrap.classList.remove("stalled");progressLabel.textContent=label;clearTimeout(_stallTimer);_stallTimer=setTimeout(()=>{progressWrap.classList.add("stalled");progressLabel.textContent="taking a while\\u2026 use Stop if stuck";},30000);}',
+    'function progressHide(){progressWrap.classList.remove("active","stalled");clearTimeout(_stallTimer);}',
     'const es=new EventSource("/events");',
     'es.onmessage=e=>{',
     '  const ev=JSON.parse(e.data);',
     '  const id=ev.agentId||"main";',
     '  if(id!=="main"&&!agentState[id])getOrCreateAgent(id,ev.agentName||id);',
     '  const s=agentState[id];if(!s)return;',
-    '  if(ev.type==="status"){s.busy=true;s.currentTools=null;s.streamBubble=null;if(id===activeAgentId)dot.className="thinking";if(id==="main"){sendBtn.disabled=true;stopBtn.classList.add("visible");}}',
+    '  if(ev.type==="status"){s.busy=true;s.currentTools=null;s.streamBubble=null;if(id===activeAgentId)dot.className="thinking";if(id==="main"){sendBtn.disabled=true;stopBtn.classList.add("visible");progressShow("thinking...");}}',
     '  if(ev.type==="stream_start"){',
     '    s.currentTools=null;',
+    '    if(id==="main")progressUpdate("writing response...");',
     '    const wrap=document.createElement("div");wrap.className="msg assistant";',
     '    const lbl=document.createElement("div");lbl.className="label";lbl.textContent="' + N + '";',
     '    s.streamBubble=document.createElement("div");s.streamBubble.className="bubble";',
     '    wrap.appendChild(lbl);wrap.appendChild(s.streamBubble);s.pane.appendChild(wrap);scroll(id);',
     '  }',
     '  if(ev.type==="token"&&s.streamBubble){s.streamBubble.textContent+=ev.content;scroll(id);}',
-    '  if(ev.type==="stream_end"){s.streamBubble=null;}',
-    '  if(ev.type==="done"&&!ev.agentId){s.busy=false;if(id===activeAgentId)dot.className="";if(id==="main"){sendBtn.disabled=false;stopBtn.classList.remove("visible");}}',
+    '  if(ev.type==="stream_end"){s.streamBubble=null;if(id==="main")progressUpdate("processing...");}',
+    '  if(ev.type==="done"&&!ev.agentId){s.busy=false;if(id===activeAgentId)dot.className="";if(id==="main"){sendBtn.disabled=false;stopBtn.classList.remove("visible");progressHide();}}',
     '  if(ev.type==="agent_done"){',
     '    const ds=agentState[ev.agentId];if(ds){ds.busy=false;if(ds.tab){ds.tab.classList.remove("running");ds.tab.classList.add(ev.status==="done"?"done":"error");}}',
     '    if(ev.agentId===activeAgentId)dot.className="";',
     '    if(ev.agentId!==activeAgentId){const t=document.createElement("div");t.className="agent-toast";t.textContent="\\u2713 "+ev.agentName+" finished";t.onclick=()=>{switchAgent(ev.agentId);t.remove();};document.body.appendChild(t);setTimeout(()=>t.remove(),4000);}',
     '    addMsg(ev.agentId,"sys","Agent done ("+ev.status+")");',
     '  }',
-    '  if(ev.type==="tool_start"){if(!s.currentTools)s.currentTools=openToolBlock(id);s.pendingTools[ev.name]=addToolItem(s.currentTools,id,ev.name,ev.args||{});}',
+    '  if(ev.type==="tool_start"){',
+    '    if(!s.currentTools)s.currentTools=openToolBlock(id);s.pendingTools[ev.name]=addToolItem(s.currentTools,id,ev.name,ev.args||{});',
+    '    if(id==="main"){const prefix=_toolIcons[ev.name]||ev.name+": ";const detail=(ev.args?.command||ev.args?.query||ev.args?.path||ev.args?.url||ev.args?.key||"").slice(0,60);progressUpdate(prefix+detail);}',
+    '  }',
     '  if(ev.type==="tool_result"){',
     '    const item=s.pendingTools[ev.name];',
     '    if(item){let res=item.querySelector(".tool-result");if(!res){res=document.createElement("div");res.className="tool-result";item.appendChild(res);}res.textContent=String(ev.result||"").slice(0,300);delete s.pendingTools[ev.name];}',
+    '    if(id==="main")progressUpdate("processing...");',
     '    scroll(id);',
     '  }',
     '  if(ev.type==="todo_update"&&id==="main"){',
@@ -285,6 +319,7 @@ function buildScript(agentName) {
     '  }',
     '  if(ev.type==="clarify"){',
     '    s.currentTools=null;',
+    '    if(id==="main")progressHide();',
     '    const wrap=document.createElement("div");wrap.className="msg assistant";',
     '    const lbl=document.createElement("div");lbl.className="label";lbl.textContent="' + N + '";',
     '    const bub=document.createElement("div");bub.className="bubble";bub.textContent=ev.question;',
@@ -299,7 +334,7 @@ function buildScript(agentName) {
     '  }',
     '  if(ev.type==="system")addMsg(id,"sys",ev.text);',
     '  if(ev.type==="model_changed"){for(const opt of modelSel.options)opt.selected=opt.value===ev.model;}',
-    '  if(ev.type==="error"){if(id==="main")sendBtn.disabled=false;addMsg(id,"sys","\\u26a0 "+ev.message);}',
+    '  if(ev.type==="error"){if(id==="main"){sendBtn.disabled=false;progressHide();}addMsg(id,"sys","\\u26a0 "+ev.message);}',
     '};',
     'const modelSel=document.getElementById("model-select");',
     'async function loadModels(){try{const r=await fetch("/models");const{groups,active}=await r.json();modelSel.innerHTML="";let found=false;for(const group of groups){const grp=document.createElement("optgroup");grp.label=group.label;for(const m of group.models){const opt=document.createElement("option");opt.value=m;opt.textContent=m.includes("/")?m.split("/")[1].replace(/-instruct.*$/,""):m;opt.title=m;if(m===active){opt.selected=true;found=true;}grp.appendChild(opt);}modelSel.appendChild(grp);}if(!found){const opt=document.createElement("option");opt.value=active;opt.textContent=active;opt.selected=true;modelSel.prepend(opt);}}catch{}}',
@@ -362,6 +397,14 @@ export async function serveUI(messages) {
     if (req.url === '/events' && req.method === 'GET') {
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'Access-Control-Allow-Origin': '*' });
       res.write(':\n\n'); sseClients.add(res);
+      // Drain any events that fired before the browser connected
+      for (const ev of _bootBuffer) {
+        try { res.write('data: ' + JSON.stringify(ev) + '\n\n'); } catch {}
+      }
+      _bootBuffer.length = 0;
+      // Drain any auto-boot messages queued before the main loop was ready
+      for (const txt of _bootInputQueue) pushInput(txt);
+      _bootInputQueue.length = 0;
       req.on('close', () => { sseClients.delete(res); if (sseClients.size === 0) setInterrupt(); });
       return;
     }

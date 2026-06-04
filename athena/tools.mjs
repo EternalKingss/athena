@@ -2,7 +2,7 @@
 import { readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { resolve, join, isAbsolute, delimiter } from 'node:path';
-import { exec } from 'node:child_process';
+import { exec, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { BRAVE_KEY, AUTO } from './config.mjs';
 import { PATHS } from './paths.mjs';
@@ -86,8 +86,24 @@ export async function runTool(name, args, preApproved, sessionTodos, setSessionT
       const extra = PATHS.pythonBin + delimiter + PATHS.pythonPkg;
       env.PATH = extra + delimiter + (env.PATH || '');
     }
-    const { stdout, stderr } = await execAsync(args.command, { timeout: 120000, maxBuffer: 1024 * 1024 * 10, env });
-    return (stdout || '') + (stderr ? '\n[stderr]\n' + stderr : '') || '(no output)';
+    const isPermErr = msg => /permission denied|need.*root|must be.*root|you need to be root|EACCES|Operation not permitted/i.test(msg);
+    const runCmd = async cmd => {
+      const { stdout, stderr } = await execAsync(cmd, { timeout: 120000, maxBuffer: 1024 * 1024 * 10, env });
+      return (stdout || '') + (stderr ? '\n[stderr]\n' + stderr : '') || '(no output)';
+    };
+    try {
+      return await runCmd(args.command);
+    } catch (e) {
+      // Auto-retry with sudo on permission errors (Linux/Mac only — Windows uses UAC not sudo)
+      if (isPermErr(e.message) && process.platform !== 'win32' && !args.command.trimStart().startsWith('sudo ')) {
+        try {
+          return await runCmd('sudo ' + args.command);
+        } catch (e2) {
+          throw new Error(e2.message);
+        }
+      }
+      throw e;
+    }
   }
 
   if (name === 'read_file')  return await readFile(args.path, 'utf8');
@@ -149,7 +165,21 @@ export async function runTool(name, args, preApproved, sessionTodos, setSessionT
       const b64 = Buffer.from(String(args.text)).toString('base64');
       return runPS(`[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('${b64}')) | Set-Clipboard`);
     }
-    try { const p = await import('node:child_process'); const proc = p.spawn('xclip -selection clipboard', [], { shell: true }); proc.stdin.write(args.text); proc.stdin.end(); return 'Copied.'; } catch { return '(clipboard unavailable)'; }
+    // Mac uses pbcopy, Linux uses xclip then xsel as fallback — await the process so write is complete before returning
+    const tryWrite = cmd => new Promise((resolve, reject) => {
+      const proc = spawn(cmd, [], { shell: true });
+      proc.stdin.write(String(args.text));
+      proc.stdin.end();
+      proc.on('close', code => code === 0 ? resolve() : reject(new Error('exit ' + code)));
+      proc.on('error', reject);
+    });
+    const cmds = process.platform === 'darwin'
+      ? ['pbcopy']
+      : ['xclip -selection clipboard', 'xsel --clipboard --input'];
+    for (const cmd of cmds) {
+      try { await tryWrite(cmd); return 'Copied.'; } catch {}
+    }
+    return '(clipboard unavailable)';
   }
 
   if (name === 'notify') {
@@ -259,13 +289,27 @@ export async function runTool(name, args, preApproved, sessionTodos, setSessionT
     }
     if (!ok) throw new Error('not approved');
     if (!plan.steps.length) return plan.explain;
+    const isPermErr = msg => /permission denied|need.*root|must be.*root|you need to be root|EACCES|Operation not permitted/i.test(msg);
     const results = [];
     for (const step of plan.steps) {
+      let ran = step;
       try {
-        const { stdout, stderr } = await execAsync(step, { timeout: 30000 });
-        results.push(`✓ ${step}\n  ${((stdout || stderr || '').trim()).slice(0, 200)}`);
+        const { stdout, stderr } = await execAsync(step, { timeout: 60000 });
+        results.push(`✓ ${ran}\n  ${((stdout || stderr || '').trim()).slice(0, 200)}`);
       } catch (e) {
-        results.push(`✗ ${step}\n  ${e.message.slice(0, 200)}`);
+        // If permission error and not already using sudo, retry with sudo (Linux/Mac only)
+        if (isPermErr(e.message) && process.platform !== 'win32' && !step.trimStart().startsWith('sudo ')) {
+          ran = 'sudo ' + step;
+          try {
+            const { stdout, stderr } = await execAsync(ran, { timeout: 60000 });
+            results.push(`✓ ${ran}\n  ${((stdout || stderr || '').trim()).slice(0, 200)}`);
+            continue;
+          } catch (e2) {
+            results.push(`✗ ${ran}\n  ${e2.message.slice(0, 200)}\n  [needs manual: run with elevated privileges]`);
+            continue;
+          }
+        }
+        results.push(`✗ ${ran}\n  ${e.message.slice(0, 200)}`);
       }
     }
     return results.join('\n\n');

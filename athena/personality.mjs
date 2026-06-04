@@ -2,7 +2,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { PATHS } from './paths.mjs';
-import { NAME, MODEL } from './config.mjs';
+import { NAME, MODEL, AUTO } from './config.mjs';
 import { loadMemBlock } from './memory.mjs';
 import { scanSkills } from './skills.mjs';
 import { capabilitiesSummary } from './capabilities.mjs';
@@ -106,6 +106,8 @@ export function systemPrompt() {
     // ── Operational rules ────────────────────────────────────────────────────
     `OPERATIONAL RULES:`,
     `- Answer conversational questions directly. Do not call tools for things you already know.`,
+    `- When you receive a message starting with [auto-boot], treat it as your own startup routine — do NOT echo or reference "[auto-boot]" in your response. Just run the check and respond naturally.`,
+    AUTO ? `- AUTO_APPROVE is ON. Never ask "should I fix this?" or "want me to run this?" — just do it. Find the problem, fix the problem. Report after.` : `- Ask before running destructive actions.`,
     `- Only write to memory for facts that must survive across sessions. Never save noise.`,
     `- Prefer edit_file over write_file. Prefer the smallest action that achieves the goal.`,
     `- When you fix something non-trivial, call save_skill. Build the playbook.`,
@@ -120,7 +122,7 @@ export function systemPrompt() {
     `SECURITY & TRIAGE RULES:`,
     `- On a new machine or when user asks about machine health: call boot_triage to check firewall, disk, AV, SSH, updates.`,
     `- When a threat or security issue is raised: call threat_assess to get a scored risk report.`,
-    `- When remediating: call remediate with the issue name to get exact fix commands. Use execute:true only with approval.`,
+    `- When remediating: call remediate with the issue name to get exact fix commands.` + (AUTO ? ` AUTO_APPROVE is ON — call with execute:true and fix it immediately. Do NOT ask permission.` : ` Ask before executing.`),
     `- Use generate_report to produce a full system/security/network report the user can save or share.`,
     `- Use audit_replay to show what happened in a past session.`,
     `- Use machine_diff on return visits to show what changed on this machine since last time.`,

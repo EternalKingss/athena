@@ -144,6 +144,10 @@ export async function turn(messages, emit, opts = {}) {
         result = `Error: ${e.message}`;
       }
       emit({ type: 'tool_result', name: call.function.name, result });
+      // Sync the UI todo strip whenever the todo tool updates the task list
+      if (call.function.name === 'todo' && !opts.isolated) {
+        emit({ type: 'todo_update', todos: SESSION_TODOS });
+      }
       const compressed = compressOutput(String(result), call.function.name);
       toolResults.push({ role: 'tool', tool_call_id: call.id, content: compressed });
     }
@@ -169,7 +173,11 @@ export async function turn(messages, emit, opts = {}) {
       if (summary) {
         emit({ type: 'stream_end' });
       } else {
-        summary = '[interrupted — summary unavailable]';
+        // Stream failed or returned nothing — show the fallback visibly
+        summary = 'Interrupted. I may have been mid-task; just let me know what to continue.';
+        emit({ type: 'stream_start' });
+        emit({ type: 'token', content: summary });
+        emit({ type: 'stream_end' });
       }
       messages.push({ role: 'assistant', content: summary });
       emit({ type: 'done' });

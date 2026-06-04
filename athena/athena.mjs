@@ -11,7 +11,7 @@ import { PATHS } from './paths.mjs';
 import { systemPrompt } from './personality.mjs';
 import { saveAndSummarize } from './memory.mjs';
 import { turn, runTask, setRequestUserInput, freshMessages, setInterrupt, isActive } from './core.mjs';
-import { serveUI, uiEmit } from './ui.mjs';
+import { serveUI, uiEmit, queueBootInput } from './ui.mjs';
 import { setAgentFunctions } from './tools.mjs';
 import { spawnAgent, listAgents, workspaceRead, workspaceWrite } from './agents.mjs';
 import { detectCapabilities, getCachedCapabilities } from './capabilities.mjs';
@@ -186,20 +186,18 @@ detectCapabilities()
     // Backfill system prompt with fresh machine data
     if (_activeMessages?.[0]?.role === 'system') _activeMessages[0].content = systemPrompt();
 
-    // Machine return check (Pillar 6/10)
-    const machineResult = await checkMachineReturn(caps).catch(() => null);
-    if (machineResult?.report) _globalEmit?.({ type: 'system', text: machineResult.report });
-
-    // Boot triage — emit warnings only, not clean-pass noise (Pillar 1)
-    const { runBootTriage } = await import('./triage.mjs');
-    const triage = await runBootTriage().catch(() => null);
-    if (triage) {
-      const urgent = triage.checks.filter(c => c.status === 'critical' || c.status === 'warn');
-      if (urgent.length) _globalEmit?.({ type: 'system', text: `Boot triage: ${triage.summary}` });
+    // Auto-greet: make Athena speak on startup without being asked.
+    // UI mode: queueBootInput buffers the message and fires it once the browser connects.
+    // CLI mode: push directly and call turn() while waiting for user input.
+    if (UI_MODE) {
+      queueBootInput('[auto-boot] Drive connected. Run boot_triage and machine_info to check this machine, then greet me with your status report.');
+    } else if (_activeMessages?.length === 1 && _globalEmit && !isActive()) {
+      _activeMessages.push({ role: 'user', content: '[auto-boot] Drive connected. Run boot_triage and machine_info to check this machine, then greet me with your status report.' });
+      await turn(_activeMessages, _globalEmit).catch(() => {});
     }
 
-    // Audit session start (Pillar 5)
-    await logAuditEvent('session_start', { platform: process.platform, arch: process.arch, model: (await import('./config.mjs')).state.activeModel }).catch(() => {});
+    // Audit session start
+    await logAuditEvent('session_start', { platform: process.platform, arch: process.arch, model: state.activeModel }).catch(() => {});
   })
   .catch(() => {});
 

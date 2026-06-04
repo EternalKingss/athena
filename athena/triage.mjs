@@ -35,8 +35,15 @@ export async function runBootTriage() {
     const out = await probe('/usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate 2>/dev/null', 'firewall');
     fwStatus = /enabled/i.test(out) ? 'enabled' : 'disabled';
   } else if (hasTool(sec, 'ufw')) {
-    const out = await probe('ufw status 2>/dev/null | head -1', 'firewall-ufw');
-    fwStatus = /active/i.test(out) ? 'active' : 'inactive';
+    // ufw status requires root — use systemctl or /etc/ufw/ufw.conf as rootless fallback
+    const svcOut = await probe('systemctl is-active ufw 2>/dev/null', 'firewall-ufw-svc');
+    if (/^active/.test(svcOut.trim())) {
+      fwStatus = 'active';
+    } else {
+      // Try reading the config directly (no root needed)
+      const confOut = await probe('grep -i "^ENABLED=" /etc/ufw/ufw.conf 2>/dev/null', 'firewall-ufw-conf');
+      fwStatus = /=yes/i.test(confOut) ? 'active' : 'inactive';
+    }
   } else if (hasTool(sec, 'iptables') || hasTool(sec, 'nftables') || hasTool(sec, 'firewalld')) {
     fwStatus = 'configured';
   } else {
@@ -87,14 +94,19 @@ export async function runBootTriage() {
 
   // ---- SSH exposure ----
   if (!isWin) {
-    const out = await probe("ss -tlnp 2>/dev/null | grep -E ':22 |:22$' | head -3 || netstat -an 2>/dev/null | grep -E '\\.22\\s|LISTEN' | grep ':22' | head -3", 'ssh');
+    // Linux: ss with netstat fallback. Mac: lsof or netstat (different output format — uses .22 not :22)
+    const sshCmd = isMac
+      ? "lsof -nP -iTCP:22 -sTCP:LISTEN 2>/dev/null | tail -n +2 | head -3 || netstat -an 2>/dev/null | grep -E '\\.22\\s.*LISTEN' | head -3"
+      : "ss -tlnp 2>/dev/null | grep -E ':22\\s|:22$' | head -3 || netstat -tlnp 2>/dev/null | grep ':22' | head -3";
+    const out = await probe(sshCmd, 'ssh');
     if (out) {
       checks.push({ name: 'SSH', status: 'warn', detail: 'Port 22 listening — verify key-based auth is enforced' });
     }
   }
 
-  // ---- Pending system updates (Linux only) ----
+  // ---- Pending system updates ----
   if (!isWin && !isMac) {
+    // Linux (apt)
     const aptOut = await probe('apt list --upgradable 2>/dev/null | tail -n +2 | wc -l', 'updates');
     if (aptOut) {
       const pending = parseInt(aptOut, 10) || 0;
@@ -102,6 +114,37 @@ export async function runBootTriage() {
         name:   'System updates',
         status: pending > 0 ? 'warn' : 'ok',
         detail: pending > 0 ? `${pending} packages can be upgraded` : 'Up to date',
+      });
+    }
+  }
+
+  if (isMac) {
+    // macOS software updates + brew outdated
+    const swOut = await probe("softwareupdate -l 2>/dev/null | grep -c '\\*' || echo 0", 'updates-mac-sw');
+    const brewOut = await probe('brew outdated 2>/dev/null | wc -l | tr -d " "', 'updates-mac-brew');
+    const swPending  = Math.max(0, parseInt(swOut,  10) || 0);
+    const brewPending = Math.max(0, parseInt(brewOut, 10) || 0);
+    const total = swPending + brewPending;
+    const parts = [swPending > 0 ? `${swPending} macOS update(s)` : '', brewPending > 0 ? `${brewPending} brew package(s)` : ''].filter(Boolean);
+    checks.push({
+      name:   'System updates',
+      status: total > 0 ? 'warn' : 'ok',
+      detail: total > 0 ? parts.join(', ') + ' available' : 'Up to date',
+    });
+  }
+
+  if (isWin) {
+    // Windows pending updates via PowerShell COM (no install needed)
+    const wuOut = await probe(
+      'powershell -NoProfile -Command "(New-Object -ComObject Microsoft.Update.Session).CreateUpdateSearcher().Search(\'IsInstalled=0\').Updates.Count" 2>nul',
+      'updates-win'
+    );
+    const pending = parseInt(wuOut, 10);
+    if (!isNaN(pending)) {
+      checks.push({
+        name:   'System updates',
+        status: pending > 0 ? 'warn' : 'ok',
+        detail: pending > 0 ? `${pending} Windows updates pending` : 'Up to date',
       });
     }
   }

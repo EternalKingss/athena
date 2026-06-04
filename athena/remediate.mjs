@@ -3,13 +3,13 @@
 const PLAYBOOKS = {
   firewall: {
     linux: {
-      check:   'ufw status',
-      steps:   ['ufw default deny incoming', 'ufw default allow outgoing', 'ufw allow ssh', 'ufw --force enable'],
+      check:   'systemctl is-active ufw 2>/dev/null || grep -i "^ENABLED=" /etc/ufw/ufw.conf 2>/dev/null',
+      steps:   ['sudo ufw default deny incoming', 'sudo ufw default allow outgoing', 'sudo ufw allow ssh', 'sudo ufw --force enable'],
       explain: 'Enables UFW firewall — blocks all inbound traffic except SSH.',
     },
     darwin: {
       check:   '/usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate',
-      steps:   ['/usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate on'],
+      steps:   ['sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate on'],
       explain: 'Enables the macOS application firewall.',
     },
     win32: {
@@ -22,9 +22,9 @@ const PLAYBOOKS = {
     linux: {
       check:   'grep -E "^PermitRootLogin|^PasswordAuthentication" /etc/ssh/sshd_config',
       steps:   [
-        "sed -i 's/^#\\?PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config",
-        "sed -i 's/^#\\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config",
-        'systemctl restart sshd 2>/dev/null || service ssh restart',
+        "sudo sed -i 's/^#\\?PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config",
+        "sudo sed -i 's/^#\\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config",
+        'sudo systemctl restart sshd 2>/dev/null || sudo service ssh restart',
       ],
       explain: 'Disables root login and password authentication over SSH. Key-based auth is required.',
     },
@@ -32,26 +32,26 @@ const PLAYBOOKS = {
   fail2ban: {
     linux: {
       check:   'fail2ban-client status 2>/dev/null | head -3',
-      steps:   ['systemctl enable fail2ban', 'systemctl start fail2ban'],
+      steps:   ['sudo systemctl enable fail2ban', 'sudo systemctl start fail2ban'],
       explain: 'Enables and starts fail2ban to auto-ban repeated failed SSH logins.',
     },
   },
   clamav: {
     linux: {
       check:   'clamscan --version 2>/dev/null || echo "not installed"',
-      steps:   ['apt-get install -y clamav clamav-daemon', 'freshclam', 'systemctl enable clamav-daemon', 'systemctl start clamav-daemon'],
+      steps:   ['sudo apt-get install -y clamav clamav-daemon', 'sudo freshclam', 'sudo systemctl enable clamav-daemon', 'sudo systemctl start clamav-daemon'],
       explain: 'Installs ClamAV antivirus, updates virus definitions, and starts the daemon.',
     },
   },
   updates: {
     linux: {
       check:   'apt list --upgradable 2>/dev/null | tail -n +2 | wc -l',
-      steps:   ['apt-get update -y', 'apt-get upgrade -y --with-new-pkgs', 'apt-get autoremove -y'],
+      steps:   ['sudo apt-get update -y', 'sudo apt-get upgrade -y --with-new-pkgs', 'sudo apt-get autoremove -y'],
       explain: 'Updates all installed packages to their latest versions.',
     },
     darwin: {
       check:   'softwareupdate -l 2>/dev/null | head -10',
-      steps:   ['softwareupdate -ia'],
+      steps:   ['sudo softwareupdate -ia'],
       explain: 'Installs all available macOS software updates.',
     },
     win32: {
@@ -63,7 +63,7 @@ const PLAYBOOKS = {
   disk: {
     linux: {
       check:   'df -h /',
-      steps:   ['journalctl --vacuum-time=7d', 'apt-get clean -y', 'apt-get autoremove -y'],
+      steps:   ['sudo journalctl --vacuum-time=7d', 'sudo apt-get clean -y', 'sudo apt-get autoremove -y'],
       explain: 'Cleans journal logs older than 7 days and removes unused package cache.',
     },
     darwin: {
@@ -80,8 +80,8 @@ const PLAYBOOKS = {
   suid: {
     linux: {
       check:   'find /usr /bin /sbin -perm /4000 -type f 2>/dev/null',
-      steps:   [], // SUID removal is binary-specific — return guidance instead
-      explain: 'SUID binaries must be reviewed case-by-case. Use "chmod u-s <path>" to remove the SUID bit from unnecessary binaries.',
+      steps:   [],
+      explain: 'SUID binaries must be reviewed case-by-case. Use "sudo chmod u-s <path>" to remove the SUID bit from unnecessary binaries.',
     },
   },
 };
@@ -102,12 +102,20 @@ function matchPlaybook(issue) {
 export function getRemediationPlan(issue) {
   const pb   = matchPlaybook(issue);
   const plat = process.platform;
-  const plan = pb?.[plat] || pb?.['linux'];
 
-  if (!plan) {
+  if (!pb) {
     return {
       found:   false,
       message: `No automated playbook for: "${issue}". Use run_shell with specific commands, or ask Athena to search for the fix.`,
+    };
+  }
+
+  // Don't fall back to Linux steps on Windows/Mac — wrong package managers, no sudo, etc.
+  const plan = pb[plat] || (plat === 'linux' ? pb['linux'] : null);
+  if (!plan) {
+    return {
+      found:   false,
+      message: `No automated playbook for "${issue}" on ${plat}. Use run_shell with platform-appropriate commands or ask Athena to look it up.`,
     };
   }
 
