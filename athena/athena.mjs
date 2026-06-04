@@ -174,6 +174,8 @@ async function runCLI() {
 
     messages.push({ role: 'user', content: input });
     try { await turn(messages, cliEmit); } catch (e) { console.log(`\n  error: ${e.message}\n`); }
+    // Auto-save after every turn so crashes/kills don't lose the session
+    saveAndSummarize(messages).catch(() => {});
   }
 }
 
@@ -187,12 +189,24 @@ detectCapabilities()
     if (_activeMessages?.[0]?.role === 'system') _activeMessages[0].content = systemPrompt();
 
     // Auto-greet: make Athena speak on startup without being asked.
+    // Only run full boot_triage when it hasn't run in the last 6 hours — otherwise
+    // just greet from memory so every session doesn't feel like a first-time setup.
+    const SIX_HOURS_MS  = 6 * 60 * 60 * 1000;
+    const { loadFingerprint } = await import('./machines.mjs');
+    const fp              = loadFingerprint();
+    const lastChecked     = fp?.capturedAt ? Date.now() - new Date(fp.capturedAt).getTime() : Infinity;
+    const needsFullTriage = lastChecked > SIX_HOURS_MS;
+
+    const bootMsg = needsFullTriage
+      ? '[auto-boot] Drive connected. Run boot_triage and machine_info to check this machine, then greet me with your status report.'
+      : '[auto-boot] Drive connected. Skip the full triage — it ran recently. Just greet me briefly and note the current OS/platform.';
+
     // UI mode: queueBootInput buffers the message and fires it once the browser connects.
     // CLI mode: push directly and call turn() while waiting for user input.
     if (UI_MODE) {
-      queueBootInput('[auto-boot] Drive connected. Run boot_triage and machine_info to check this machine, then greet me with your status report.');
+      queueBootInput(bootMsg);
     } else if (_activeMessages?.length === 1 && _globalEmit && !isActive()) {
-      _activeMessages.push({ role: 'user', content: '[auto-boot] Drive connected. Run boot_triage and machine_info to check this machine, then greet me with your status report.' });
+      _activeMessages.push({ role: 'user', content: bootMsg });
       await turn(_activeMessages, _globalEmit).catch(() => {});
     }
 
@@ -204,12 +218,16 @@ detectCapabilities()
 if (UI_MODE) {
   _globalEmit = uiEmit;
   _activeMessages = freshMessages();
-  process.on('SIGINT', async () => {
+
+  const uiShutdown = async () => {
     await saveAndSummarize(_activeMessages);
     const caps = getCachedCapabilities();
     if (caps) await Promise.all([saveFingerprint(caps), logAuditEvent('session_end')]).catch(() => {});
     process.exit(0);
-  });
+  };
+  // SIGINT = Ctrl-C, SIGTERM = tab close / process manager kill — both save
+  process.on('SIGINT',  uiShutdown);
+  process.on('SIGTERM', uiShutdown);
   await serveUI(_activeMessages);
 } else {
   await runCLI();

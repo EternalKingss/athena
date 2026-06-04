@@ -2,14 +2,34 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { writeFile, mkdir } from 'node:fs/promises';
-import { hostname } from 'node:os';
+import { hostname, cpus, totalmem, networkInterfaces } from 'node:os';
 import { join } from 'node:path';
 import { PATHS } from './paths.mjs';
 
 const MACHINES_DIR = join(PATHS.memDir, 'machines');
 
+// Hardware fingerprint — stable across Linux/Windows dual-boot on the same physical machine.
+// Uses CPU model + core count + total RAM + first non-loopback MAC address.
+// Hostname is intentionally excluded because it differs per OS.
 function machineId() {
-  return createHash('sha256').update(hostname()).digest('hex').slice(0, 16);
+  const cpu   = cpus()[0]?.model?.trim() || 'unknown-cpu';
+  const cores = String(cpus().length);
+  const ram   = String(Math.round(totalmem() / (1024 ** 3)));   // GB, rounded
+
+  // First non-loopback, non-internal MAC address
+  let mac = 'no-mac';
+  for (const ifaces of Object.values(networkInterfaces())) {
+    for (const iface of ifaces) {
+      if (!iface.internal && iface.mac && iface.mac !== '00:00:00:00:00:00') {
+        mac = iface.mac;
+        break;
+      }
+    }
+    if (mac !== 'no-mac') break;
+  }
+
+  const raw = `${cpu}|${cores}|${ram}GB|${mac}`;
+  return createHash('sha256').update(raw).digest('hex').slice(0, 16);
 }
 
 function fingerprintPath() {
@@ -17,10 +37,16 @@ function fingerprintPath() {
 }
 
 export async function saveFingerprint(caps) {
+  // Load existing snapshot so we can accumulate hostnames seen on this hardware.
+  const existing = loadFingerprint();
+  const seenHostnames = new Set(existing?.seenHostnames || []);
+  seenHostnames.add(hostname());
+
   const snapshot = {
-    hostname:   hostname(),
-    machineId:  machineId(),
-    capturedAt: new Date().toISOString(),
+    machineId:     machineId(),
+    seenHostnames: [...seenHostnames],   // e.g. ["DESKTOP-ABC", "mint-laptop"]
+    lastHostname:  hostname(),
+    capturedAt:    new Date().toISOString(),
     caps,
   };
   try {
@@ -115,11 +141,16 @@ export async function checkMachineReturn(currentCaps) {
   const diff = diffFingerprints(prev.caps, currentCaps);
   const ago  = formatTimeAgo(prev.capturedAt);
 
+  // If this OS hostname differs from the last recorded one, note the OS switch.
+  const switchNote = prev.lastHostname && prev.lastHostname !== hostname()
+    ? ` (was on "${prev.lastHostname}", now on "${hostname()}" — same hardware)`
+    : '';
+
   return {
     isReturn: true,
     lastSeen: prev.capturedAt,
     report:   diff
-      ? `Back on ${hostname()} (last seen ${ago}). Changes since last visit:\n${diff}`
-      : `Back on ${hostname()} (last seen ${ago}). No significant changes detected.`,
+      ? `Back on this machine${switchNote} (last seen ${ago}). Changes since last visit:\n${diff}`
+      : `Back on this machine${switchNote} (last seen ${ago}). No significant changes detected.`,
   };
 }
