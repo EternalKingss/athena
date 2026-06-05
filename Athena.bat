@@ -47,4 +47,5 @@ if defined IFACE (
   del "%BACKUP%" >nul 2>&1
   echo   [dns] DNS restored
 )
+
 pause
