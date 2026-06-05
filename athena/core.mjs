@@ -2,7 +2,7 @@
 import { chat, chatStream } from './api.mjs';
 import { TOOLS, DESTRUCTIVE, runTool } from './tools.mjs';
 import { systemPrompt } from './personality.mjs';
-import { AUTO } from './config.mjs';
+import { AUTO, state, API_KEY, ANTHROPIC_KEY } from './config.mjs';
 import { compressOutput } from './compress.mjs';
 
 // ---- Session state ----
@@ -24,8 +24,8 @@ const _noopInput = async (question) => `(background agent — cannot ask user: $
 
 // ---- Context compression ----
 const COMPRESS_AT        = 40;
-const COMPRESS_KEEP_START = 4;
-const COMPRESS_KEEP_END   = 10;
+const COMPRESS_KEEP_START = 2;
+const COMPRESS_KEEP_END   = 15;
 
 async function maybeCompress(messages, emit, currentTodos = []) {
   if (messages.length < COMPRESS_AT) return;
@@ -35,6 +35,10 @@ async function maybeCompress(messages, emit, currentTodos = []) {
   if (middle.length < 6) return;
 
   emit({ type: 'system', text: `Compressing ${middle.length} messages to stay within context…` });
+  // Use cheapest available model for compression — no reason to burn expensive tokens on housekeeping
+  const savedModel = state.activeModel;
+  if (API_KEY) state.activeModel = 'gpt-4o-mini';
+  else if (ANTHROPIC_KEY) state.activeModel = 'claude-haiku-4-5-20251001';
   try {
     const sum = await chat([
       { role: 'system', content: 'Summarize this conversation in 10-15 bullet points. Be specific: include filenames, commands, values, decisions, problems solved, current state. No preamble.' },
@@ -47,7 +51,9 @@ async function maybeCompress(messages, emit, currentTodos = []) {
     messages.length = 0;
     messages.push(...start, summary, ...todoReinject, ...end);
     emit({ type: 'system', text: `Compressed (${middle.length} → 1). Continuing…` });
-  } catch { /* non-fatal */ }
+  } catch { /* non-fatal */ } finally {
+    state.activeModel = savedModel;
+  }
 }
 
 // ---- Core turn loop ----
@@ -66,6 +72,20 @@ export async function turn(messages, emit, opts = {}) {
 
   const MAX_TOOL_ITERATIONS = 50;
   let toolIterations = 0;
+
+  // ---- Loop / stall detection (Agent Introspection) ----
+  // Tracks the last N tool calls. If the same tool+args combo repeats 3x in a row
+  // Athena injects a self-diagnosis prompt instead of blindly retrying.
+  const recentCalls = [];   // { name, argsHash }
+  const LOOP_WINDOW  = 3;
+  function argsHash(args) { return JSON.stringify(args).slice(0, 120); }
+  function detectLoop(name, args) {
+    const sig = `${name}:${argsHash(args)}`;
+    recentCalls.push(sig);
+    if (recentCalls.length > LOOP_WINDOW) recentCalls.shift();
+    return recentCalls.length === LOOP_WINDOW && recentCalls.every(s => s === sig);
+  }
+
   while (true) {
     if (toolIterations >= MAX_TOOL_ITERATIONS) {
       emit({ type: 'error', message: `Stopped after ${MAX_TOOL_ITERATIONS} tool iterations to prevent runaway loop.` });
@@ -130,6 +150,7 @@ export async function turn(messages, emit, opts = {}) {
     }
 
     const toolResults = [];
+    let loopDetected = false;
     for (const { call, args } of calls) {
       const isDestructive = DESTRUCTIVE.has(call.function.name);
       emit({ type: 'tool_start', name: call.function.name, args });
@@ -150,8 +171,31 @@ export async function turn(messages, emit, opts = {}) {
       }
       const compressed = compressOutput(String(result), call.function.name);
       toolResults.push({ role: 'tool', tool_call_id: call.id, content: compressed });
+
+      // Loop detection — same tool+args 3x in a row = inject introspection prompt
+      if (detectLoop(call.function.name, args)) loopDetected = true;
     }
     messages.push(...toolResults);
+
+    // ---- Agent introspection injection ----
+    // If a loop is detected, force a self-diagnosis before the next LLM call.
+    // This breaks the retry cycle and makes Athena explain + change approach.
+    if (loopDetected) {
+      recentCalls.length = 0; // reset so one injection is enough
+      emit({ type: 'system', text: 'Loop detected — running self-diagnosis…' });
+      messages.push({
+        role: 'user',
+        content: [
+          '[introspection] You have called the same tool with the same arguments 3 times in a row without progress.',
+          'STOP retrying. Run the four-phase self-diagnosis:',
+          '1. CAPTURE — What exactly failed? What were you trying to achieve?',
+          '2. DIAGNOSE — Which pattern applies: tool loop, environment mismatch, bad assumption, permission issue, wrong file path, context drift?',
+          '3. RECOVER — What is the SMALLEST different action you can take? Change one thing.',
+          '4. REPORT — State what you found and what you are doing differently. Then proceed with the new approach.',
+          'Do NOT repeat the same call again.',
+        ].join('\n'),
+      });
+    }
 
     // Check for interrupt signal (main agent only)
     if (_interrupted && !opts.isolated) {
@@ -201,11 +245,29 @@ async function cliApprove(destructive, emit) {
 }
 
 // ---- Task runner (/task <goal>) ----
+// Dynamic Workflow Mode: every task defines its own success criteria + handoff artifact
+// before execution starts. This prevents drift and makes "done" unambiguous.
 export async function runTask(goal, messages, emit) {
   emit({ type: 'system', text: `Task: ${goal}` });
   const taskMsg = {
     role: 'user',
-    content: `You are now running in autonomous task mode.\n\nGoal: ${goal}\n\nPlan your approach using the todo tool, then execute step by step. Report progress after each step. When finished, summarize what was accomplished.`,
+    content: [
+      `You are now running in autonomous task mode.`,
+      ``,
+      `Goal: ${goal}`,
+      ``,
+      `BEFORE you start executing, define your harness:`,
+      `1. OBJECTIVE — restate the goal in one sentence (what you own, what you don't)`,
+      `2. DONE CRITERIA — list 1-3 specific, verifiable conditions that mean this task is complete`,
+      `3. INPUTS/OUTPUTS — what you need, what you will produce`,
+      ``,
+      `Then use the todo tool to build your step list, execute step by step, and check each step against your done criteria.`,
+      ``,
+      `When finished, produce a HANDOFF: what was done, current state, and any follow-up needed.`,
+      `If a step fails 2+ times, STOP and apply introspection — change approach before retrying.`,
+      ``,
+      `Promote any repeatable pattern from this task to a skill with save_skill.`,
+    ].join('\n'),
   };
   messages.push(taskMsg);
   await turn(messages, emit);
