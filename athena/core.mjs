@@ -30,9 +30,30 @@ const COMPRESS_KEEP_END   = 15;
 async function maybeCompress(messages, emit, currentTodos = []) {
   if (messages.length < COMPRESS_AT) return;
   const start  = messages.slice(0, COMPRESS_KEEP_START);
-  const end    = messages.slice(-COMPRESS_KEEP_END);
-  const middle = messages.slice(COMPRESS_KEEP_START, -COMPRESS_KEEP_END);
+  let end      = messages.slice(-COMPRESS_KEEP_END);
+  let middle   = messages.slice(COMPRESS_KEEP_START, -COMPRESS_KEEP_END);
   if (middle.length < 6) return;
+
+  // ---- Boundary safety ----
+  // The end slice must start on a clean message boundary — a real user message,
+  // not a tool result. If it starts mid tool-call sequence (role:'tool' or an
+  // assistant with tool_calls whose results are in end), the API returns HTTP 400.
+  //
+  // Fix: walk forward in end until we hit the first role:'user' message.
+  // Everything before that belongs with its tool_calls pair — move it to middle.
+  const safeStart = end.findIndex(m => m.role === 'user');
+  if (safeStart > 0) {
+    middle = [...middle, ...end.slice(0, safeStart)];
+    end    = end.slice(safeStart);
+  }
+
+  // Also ensure start doesn't end on an assistant message that has tool_calls
+  // (its tool results would land in middle and get compressed away).
+  while (start.length > 1 && start[start.length - 1].tool_calls?.length) {
+    middle.unshift(start.pop());
+  }
+
+  if (middle.length < 4) return; // not worth compressing after boundary adjustments
 
   emit({ type: 'system', text: `Compressing ${middle.length} messages to stay within context…` });
   // Use cheapest available model for compression — no reason to burn expensive tokens on housekeeping
