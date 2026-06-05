@@ -1,4 +1,4 @@
-// ui.mjs — browser UI server, SSE broadcast, HTML template
+﻿// ui.mjs — browser UI server, SSE broadcast, HTML template
 import { createServer } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
 import { existsSync, readFileSync } from 'node:fs';
@@ -152,6 +152,10 @@ function buildHTML(agentName) {
     '#stop-btn{display:none;background:transparent;border:1px solid var(--red-dim);color:var(--red);padding:10px 14px;border-radius:6px;cursor:pointer;font-family:inherit;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}',
     '#stop-btn:hover{background:var(--red-glow)}',
     '#stop-btn.visible{display:block}',
+    '#mic-btn{background:transparent;border:1px solid var(--border);color:var(--dim2);padding:10px 13px;border-radius:6px;cursor:pointer;font-size:15px;line-height:1;transition:all .15s;flex-shrink:0;user-select:none}',
+    '#mic-btn:hover{border-color:var(--green);color:var(--green)}',
+    '#mic-btn.listening{border-color:var(--red);color:var(--red);box-shadow:0 0 10px var(--red-glow);animation:pulse .8s infinite}',
+    '#mic-btn.no-support{opacity:.25;cursor:not-allowed}',
     '#mem-panel{position:fixed;right:0;top:0;height:100%;width:320px;background:var(--surface);border-left:1px solid var(--border);display:flex;flex-direction:column;transform:translateX(100%);transition:transform .25s;z-index:100}',
     '#mem-panel.open{transform:translateX(0)}',
     '#mem-panel-header{display:flex;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--border)}',
@@ -195,8 +199,9 @@ function buildHTML(agentName) {
     '  <div id="messages"><div class="agent-pane active" data-id="main"></div></div>',
     '  <div id="input-area">',
     '    <div id="input-wrap"><span id="input-prefix">&gt;</span>',
-    '      <textarea id="input" rows="1" placeholder="/task, /spawn &lt;name&gt; &lt;goal&gt;, /mem, /forget, /model ..." onkeydown="onKey(event)" oninput="resize(this)"></textarea>',
+    '      <textarea id="input" rows="1" placeholder="/task, /spawn &lt;name&gt; &lt;goal&gt;, /agents, /status, /history, /mem, /reload, /forget ..." onkeydown="onKey(event)" oninput="resize(this)"></textarea>',
     '    </div>',
+    '    <button id="mic-btn" title="Click to speak (Chrome/Edge)">&#127908;</button>',
     '    <button id="stop-btn" onclick="stopTask()">&#9632; Stop</button>',
     '    <button id="send" onclick="sendMsg()">Send &#8594;</button>',
     '  </div>',
@@ -276,8 +281,8 @@ function buildScript(agentName) {
     'const progressLabel=document.getElementById("progress-label");',
     'let _stallTimer=null;',
     'const _toolIcons={run_shell:"$ ",web_search:"search: ",fetch_url:"fetch: ",read_file:"read: ",write_file:"write: ",edit_file:"edit: ",memory:"memory: ",recall:"recall: ",spawn_agent:"spawn: ",machine_info:"machine: ",boot_triage:"triage: ",network_scan:"network: "};',
-    'function progressShow(label){progressWrap.classList.add("active");progressWrap.classList.remove("stalled");progressLabel.textContent=label;clearTimeout(_stallTimer);_stallTimer=setTimeout(()=>{progressWrap.classList.add("stalled");progressLabel.textContent="taking a while\\u2026 use Stop if stuck";},30000);}',
-    'function progressUpdate(label){if(!progressWrap.classList.contains("active"))return;progressWrap.classList.remove("stalled");progressLabel.textContent=label;clearTimeout(_stallTimer);_stallTimer=setTimeout(()=>{progressWrap.classList.add("stalled");progressLabel.textContent="taking a while\\u2026 use Stop if stuck";},30000);}',
+    'function progressShow(label){progressWrap.classList.add("active");progressWrap.classList.remove("stalled");progressLabel.textContent=label;clearTimeout(_stallTimer);_stallTimer=setTimeout(()=>{progressWrap.classList.add("stalled");progressLabel.textContent="still running... hit Stop to bail with a summary";},60000);}',
+    'function progressUpdate(label){if(!progressWrap.classList.contains("active"))return;progressWrap.classList.remove("stalled");progressLabel.textContent=label;clearTimeout(_stallTimer);_stallTimer=setTimeout(()=>{progressWrap.classList.add("stalled");progressLabel.textContent="still running... hit Stop to bail with a summary";},60000);}',
     'function progressHide(){progressWrap.classList.remove("active","stalled");clearTimeout(_stallTimer);}',
     'const es=new EventSource("/events");',
     'es.onmessage=e=>{',
@@ -335,6 +340,7 @@ function buildScript(agentName) {
     '  if(ev.type==="system")addMsg(id,"sys",ev.text);',
     '  if(ev.type==="model_changed"){for(const opt of modelSel.options)opt.selected=opt.value===ev.model;}',
     '  if(ev.type==="error"){if(id==="main"){sendBtn.disabled=false;progressHide();}addMsg(id,"sys","\\u26a0 "+ev.message);}',
+    '  if(ev.type==="clear_done_agents"){Object.keys(agentState).forEach(function(aid){if(aid==="main")return;var s=agentState[aid];if(!s.busy&&s.tab&&(s.tab.classList.contains("done")||s.tab.classList.contains("error"))){s.tab.remove();s.pane.remove();delete agentState[aid];}});}',
     '};',
     'const modelSel=document.getElementById("model-select");',
     'async function loadModels(){try{const r=await fetch("/models");const{groups,active}=await r.json();modelSel.innerHTML="";let found=false;for(const group of groups){const grp=document.createElement("optgroup");grp.label=group.label;for(const m of group.models){const opt=document.createElement("option");opt.value=m;opt.textContent=m.includes("/")?m.split("/")[1].replace(/-instruct.*$/,""):m;opt.title=m;if(m===active){opt.selected=true;found=true;}grp.appendChild(opt);}modelSel.appendChild(grp);}if(!found){const opt=document.createElement("option");opt.value=active;opt.textContent=active;opt.selected=true;modelSel.prepend(opt);}}catch{}}',
@@ -351,7 +357,45 @@ function buildScript(agentName) {
     'function clearCtx(){fetch("/clear",{method:"POST"});agentState.main.pane.innerHTML="";addMsg("main","sys","Context cleared.");}',
     'async function openMem(){document.getElementById("mem-panel").classList.add("open");const r=await fetch("/memory");const data=await r.json();const el=document.getElementById("mem-content");if(!data.length){el.innerHTML="<div class=\'mem-empty\'>No memories yet.</div>";return;}el.innerHTML="";for(const m of data){const item=document.createElement("div");item.className="mem-item";const typeEl=document.createElement("div");typeEl.className="mem-type";typeEl.textContent=m.type||"note";const textEl=document.createElement("div");textEl.className="mem-text";textEl.textContent=m.content;item.appendChild(typeEl);item.appendChild(textEl);el.appendChild(item);}}',
     'function closeMem(){document.getElementById("mem-panel").classList.remove("open");}',
-    'addMsg("main","sys","' + N + ' online. Use + New Agent to run tasks in parallel.");',
+    'addMsg("main","sys","Online. What are we breaking?");',
+    // ── Voice input (Web Speech API — Chrome/Edge) ───────────────────────────
+    '(function(){',
+    '  const btn=document.getElementById("mic-btn");',
+    '  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;',
+    '  if(!SR){btn.classList.add("no-support");btn.title="Voice input needs Chrome or Edge";return;}',
+    '  let rec=null,active=false;',
+    '  function start(){',
+    '    if(active)return;',
+    '    rec=new SR();',
+    '    rec.continuous=false;',
+    '    rec.interimResults=true;',
+    '    rec.lang="en-US";',
+    '    rec.onstart=()=>{active=true;btn.classList.add("listening");btn.title="Listening... click to cancel";};',
+    '    rec.onresult=e=>{',
+    '      let final="",interim="";',
+    '      for(let i=e.resultIndex;i<e.results.length;i++){',
+    '        if(e.results[i].isFinal)final+=e.results[i][0].transcript;',
+    '        else interim+=e.results[i][0].transcript;',
+    '      }',
+    '      input.value=final||interim;resize(input);',
+    '    };',
+    '    rec.onend=()=>{',
+    '      active=false;btn.classList.remove("listening");btn.title="Click to speak";',
+    '      const t=input.value.trim();',
+    '      if(t&&!sendBtn.disabled)sendMsg();',
+    '    };',
+    '    rec.onerror=e=>{',
+    '      active=false;btn.classList.remove("listening");btn.title="Click to speak";',
+    '      if(e.error!=="no-speech"&&e.error!=="aborted")addMsg("main","sys","\\u26a0 mic: "+e.error);',
+    '    };',
+    '    rec.start();',
+    '  }',
+    '  function stop(){if(active&&rec){rec.stop();}}',
+    '  btn.addEventListener("click",()=>{active?stop():start();});',
+    '  // Hold spacebar anywhere to talk (only when input is empty so it doesnt type spaces)',
+    '  document.addEventListener("keydown",e=>{if(e.code==="Space"&&e.target===input&&!input.value.trim()&&!active){e.preventDefault();start();}});',
+    '  document.addEventListener("keyup",e=>{if(e.code==="Space"&&active)stop();});',
+    '})();',
     '</script></body></html>',
   ].join('\n');
 }
@@ -478,13 +522,78 @@ export async function serveUI(messages) {
   while (true) {
     const inp = await nextInput();
     if (!inp) continue;
+    if (inp === '/instincts') {
+      // Show current instincts + scan for patterns
+      const { existsSync, readFileSync } = await import('node:fs');
+      const raw = existsSync(PATHS.instincts) ? readFileSync(PATHS.instincts, 'utf8').trim() : '';
+      const entries = raw ? raw.split('\x15').map(e => e.trim()).filter(Boolean) : [];
+      const { scanForInstincts } = await import('./memory.mjs');
+      const candidates = scanForInstincts(5);
+      const lines = ['INSTINCTS (' + entries.length + ' active):',
+        ...entries.map((e, i) => '  ' + (i+1) + '. ' + e),
+      ];
+      if (candidates.length) {
+        lines.push('', 'CANDIDATES (from recent sessions):');
+        candidates.forEach(c => lines.push('  ' + c.tool + ' used ' + c.count + 'x'));
+        lines.push('', 'Use: memory add, target: instincts to save new ones');
+      }
+      broadcast({ type: 'system', text: lines.join('\n') });
+      broadcast({ type: 'done' }); continue;
+    }
+    if (inp === '/reload') {
+      // Refresh system prompt in-place — picks up memory/skill changes without clearing history
+      if (messages.length > 0 && messages[0].role === 'system') {
+        messages[0].content = systemPrompt();
+        broadcast({ type: 'system', text: 'System prompt reloaded — memory and skill changes are now active.' });
+      } else {
+        broadcast({ type: 'system', text: 'No system message to reload.' });
+      }
+      broadcast({ type: 'done' }); continue;
+    }
     if (inp === '/forget') {
       resetMessages(messages);
+      // Synthetic exchange so Athena knows she lost context — without this she acts
+      // like she remembers things she no longer has access to, which feels broken.
+      messages.push({ role: 'user', content: '[system] Context cleared. Long-term memory files are intact but this session conversation history is gone. Acknowledge briefly.' });
+      messages.push({ role: 'assistant', content: 'Context cleared. Memory files intact. What do you need?' });
       broadcast({ type: 'system', text: 'Context cleared.' }); broadcast({ type: 'done' }); continue;
     }
     if (inp === '/mem') {
       const m = existsSync(PATHS.agentMem) ? readFileSync(PATHS.agentMem, 'utf8') : '(empty)';
       broadcast({ type: 'system', text: m }); broadcast({ type: 'done' }); continue;
+    }
+    if (inp === '/history') {
+      const histN = 5; // show last N summary entries
+      const sumFile = PATHS.summary;
+      if (!existsSync(sumFile)) { broadcast({ type: 'system', text: '(no session history yet)' }); broadcast({ type: 'done' }); continue; }
+      const raw = readFileSync(sumFile, 'utf8').trim();
+      // Split on entry boundaries (lines starting with '[') and take last N
+      const entries = raw.split(/\n(?=\[)/).filter(e => e.trim()).slice(-histN);
+      broadcast({ type: 'system', text: 'Last ' + entries.length + ' sessions:\n\n' + entries.join('\n\n') });
+      broadcast({ type: 'done' }); continue;
+    }
+    if (inp === '/status') {
+      const { loadFingerprint } = await import('./machines.mjs');
+      const { MEM_CHAR_LIMIT } = await import('./config.mjs');
+      const fp = loadFingerprint();
+      const trAge = fp?.capturedAt
+        ? (() => { const ms = Date.now() - new Date(fp.capturedAt).getTime(); const h = Math.floor(ms/3600000); return h < 1 ? 'just now' : h + 'h ago'; })()
+        : 'never';
+      const memChars = existsSync(PATHS.agentMem) ? readFileSync(PATHS.agentMem, 'utf8').length : 0;
+      const memPct   = Math.round(memChars / MEM_CHAR_LIMIT * 100);
+      const turns    = messages.filter(m => m.role === 'user').length;
+      const sys   = fp?.caps?.system || {};
+      const cpuLine  = sys.cpuModel ? '  cpu:     ' + sys.cpuModel.trim().slice(0, 40) + (sys.cpuCores ? ' (' + sys.cpuCores + 'c)' : '') : null;
+      const ramLine  = sys.ramTotal ? '  ram:     ' + sys.ramTotal + (sys.ramFree ? ', ' + sys.ramFree : '') : null;
+      const diskLine = sys.disks?.length ? '  disk:    ' + sys.disks.slice(0, 2).join(' | ') : null;
+      const statusText = [
+        '  model:   ' + state.activeModel,
+        '  turns:   ' + turns + ' this session',
+        '  triage:  ' + trAge,
+        '  memory:  ' + memPct + '% (' + memChars + '/' + MEM_CHAR_LIMIT + ' chars)',
+        cpuLine, ramLine, diskLine,
+      ].filter(Boolean).join('\n');
+      broadcast({ type: 'system', text: statusText }); broadcast({ type: 'done' }); continue;
     }
     if (inp.startsWith('/task ')) {
       const goal = inp.slice(6).trim();
@@ -501,6 +610,22 @@ export async function serveUI(messages) {
         broadcast({ type: 'system', text: 'Agent "' + name + '" spawned (' + agentId + ')' });
       }
       broadcast({ type: 'done' }); continue;
+    }
+    if (inp === '/clear-agents') {
+      broadcast({ type: 'clear_done_agents' }); broadcast({ type: 'done' }); continue;
+    }
+    if (inp === '/agents') {
+      const { listAgents } = await getAgentFns();
+      const agents = listAgents();
+      if (!agents.length) {
+        broadcast({ type: 'system', text: '(no agents spawned this session)' });
+        broadcast({ type: 'done' }); continue;
+      }
+      const agentLines = agents.map(a => {
+        const icon = a.status === 'running' ? '\u27f3' : a.status === 'done' ? '\u2713' : '\u2717';
+        return icon + ' ' + a.name + '  ' + a.status + '  ' + a.goal.slice(0, 60);
+      });
+      broadcast({ type: 'system', text: agentLines.join('\n') }); broadcast({ type: 'done' }); continue;
     }
     messages.push({ role: 'user', content: inp });
     try { await turn(messages, uiEmit); }
