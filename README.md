@@ -12,8 +12,9 @@ Switch between providers from the UI dropdown at any time, no restart needed:
 |----------|--------|-----------|
 | **OpenAI** | gpt-5.5, gpt-5.4-mini, gpt-4o, gpt-4o-mini | `OPENAI_API_KEY` |
 | **Anthropic** | claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5-20251001 | `ANTHROPIC_API_KEY` |
+| **Local (offline)** | Any `.gguf` model (default: Phi-3.5-mini) | none -- run `get-offline.sh` |
 
-OpenAI is also required for semantic memory (embeddings) regardless of which model you chat with. If OpenAI goes down, Athena automatically fails over to Anthropic (and back again after 15 minutes).
+If OpenAI goes down, Athena automatically fails over to Anthropic (and back again after 15 minutes). Semantic recall falls back to BM25 keyword search if no embedding provider is available.
 
 ## Setup (do this once)
 
@@ -51,6 +52,13 @@ powershell -ExecutionPolicy Bypass -File runtime\get-loki.ps1     # Windows
 ```
 Clones Loki into `tools/loki/`, installs dependencies into drive Python. Ask Athena to `load_skill loki-scan` for usage.
 
+#### Optional: Offline AI (no internet or API key required)
+```bash
+bash runtime/get-offline.sh          # Linux / macOS
+powershell -ExecutionPolicy Bypass -File runtime\get-offline.ps1   # Windows
+```
+Downloads the `llama-server` binary and Phi-3.5-mini model (~2.2 GB) to the drive. After this, Athena runs fully offline -- no API key, no wifi needed. The local model starts in the background on launch; Athena is immediately usable while it loads.
+
 ## Running
 
 - **Windows:** double-click `Athena.bat`
@@ -84,6 +92,7 @@ Athena opens in your browser. Use the dropdown to switch models.
 | `spawn_agent` | 0 | Launch a parallel background agent |
 | `workspace_read` / `workspace_write` | 0 | Share data between agents |
 | `load_skill` / `save_skill` / `update_skill` | 0/2* | Skill library management |
+| `skill_rollback` | 0 | Roll back a skill to a previous version |
 | `machine_info` | 0 | Query detected machine capabilities |
 | `boot_triage` | 0 | Firewall, AV, disk, SSH, updates health check |
 | `threat_assess` | 0 | Risk score, open ports, SUID, missing controls |
@@ -106,7 +115,7 @@ Three layers:
 
 - **Long-term memory** (`data/memory/athena.md`, `user.md`, `instincts.md`) -- loaded into every system prompt. `instincts.md` holds learned behavioral patterns auto-promoted from session analysis.
 - **Negative knowledge** (`data/memory/prohibited_patterns.md`) -- dead ends Athena has hit on this machine. Injected into system prompt so she never wastes tokens retrying known broken approaches.
-- **Semantic recall** -- every memory entry and session summary is embedded and stored in `embeddings.jsonl`. `recall` finds relevant past context by meaning, not keywords.
+- **Semantic recall** -- every memory entry and session summary is embedded and stored in `embeddings.jsonl`. `recall` finds relevant past context by meaning. Falls back to BM25 keyword search automatically if no embedding API is available.
 
 ### Instinct promotion
 
@@ -126,6 +135,13 @@ After any `/task` that uses 4+ tool calls, Athena fires a cheap-model post-task 
 | `kp41` | 10 min | New Windows Kernel-Power Event 41 (unexpected shutdown) |
 | `temp_high` | 3 min | CPU >= 80 C (high) or >= 90 C (critical) -- Linux only |
 | `net_change` | 2 min | Active network interfaces added or removed |
+| `ram_pressure` | 3 min | < 300 MB free RAM (critical) or < 500 MB (low) |
+| `cpu_spike` | 2 min | CPU > 95% for 2 consecutive checks |
+| `battery_drain` | 5 min | Battery < 10% or draining > 5%/3 min |
+| `login_failures` | 5 min | > 5 failed SSH/login attempts in 5 min window |
+| `pending_reboot` | 60 min | `/var/run/reboot-required` present or Windows registry flag set |
+
+Related alerts are correlated -- `cpu_spike` + `ram_pressure` within 5 minutes merge into a single combined event.
 
 If Athena is mid-turn when an alert fires, it queues in `_pendingAlerts` and drains at the next safe turn boundary. Critical alerts (`temp_high`, `kp41`) also checkpoint the current task state to `data/memory/task_state.json`.
 
@@ -159,6 +175,9 @@ data/memory/summary.md              -- rolling session summaries (gitignored)
 data/memory/embeddings.jsonl        -- semantic memory vectors (gitignored)
 data/memory/machines/               -- longitudinal machine fingerprints
 data/memory/task_state.json         -- watcher checkpoint (last interrupted task)
+data/memory/errors.jsonl            -- error telemetry log (gitignored)
+runtime/models/                     -- local LLM model files (.gguf, gitignored)
+data/llm_server.log                 -- llama-server output log (gitignored)
 data/sessions/                      -- full session transcripts (gitignored)
 skills/                             -- self-built skill library
 athena/                             -- source code
@@ -190,8 +209,27 @@ athena/
   tools.mjs         all tool definitions, handlers, classifyRisk()
   triage.mjs        boot health check
   ui.mjs            browser UI server, SSE streaming, HTML
-  watcher.mjs       proactive background polling engine
+  control_engine.mjs  L2 deterministic diagnostic engine (offline, no LLM)
+  local_llm.mjs       L3 local LLM lifecycle (llama-server subprocess)
+  memory_gc.mjs       memory garbage collector (dedup, contradictions, decay)
+  telemetry.mjs       error logging to errors.jsonl
+  tokens.mjs          token budget estimator (model-aware compression)
+  watcher.mjs         proactive background polling engine
 ```
+
+### Offline mode
+
+Athena has three intelligence tiers that degrade gracefully:
+
+| Tier | Requires | What works |
+|------|----------|-----------|
+| **L4** Cloud AI | Internet + API key | Full AI reasoning, tool calling, all features |
+| **L3** Local AI | `get-offline.sh` run once | Same as L4 but slower, no internet needed |
+| **L2** Control Engine | Nothing | Deterministic diagnostics: disk, network, processes, logs, ports, services, users, environment |
+
+**L2 is always available** -- even with no model, no key, and no wifi. Just ask naturally ("check disk space", "is the network up", "what processes are eating CPU") and the control engine runs the right diagnostic workflows directly. Boots in under 2 seconds regardless of model state.
+
+---
 
 ## Security
 
@@ -205,23 +243,24 @@ athena/
 
 ## Roadmap
 
-| Phase | What shipped |
-|-------|-------------|
-| **1** | Portable launchers (Windows/macOS/Linux), chat, shell + file tools, basic memory |
-| **2** | Web fetch, live web search, patch/diff editing, multi-step task runner (`/task`) |
-| **3** | Rolling session summaries, session save/resume, auto-compression at 40 messages |
-| **4** | Multi-provider (OpenAI + Anthropic), semantic recall via embeddings |
-| **5** | Multi-agent system, skill library, full web UI, tool output compression |
-| **6** | Machine capability detection at boot, portable Python + Loki scanner |
-| **8** | Tiered autonomy -- `classifyRisk()` replaces flat DESTRUCTIVE set (Tier 0/1/2) |
-| **9** | Auto-crystallization -- post-task cheap-model hook saves repeatable patterns as skills |
-| **10** | Instinct auto-promotion -- conf-scored patterns promoted to `instincts.md` after 3+ sessions |
-| **11** | Longitudinal machine records -- UUID, visit history, capability drift tracking |
-| **12** | Proactive watcher -- disk, KP41 crashes, CPU temp, network change monitoring |
-| **13-15** | CORAL peer learning, API failover (OpenAI <-> Anthropic) |
-| **16a** | CORAL versioned pull model -- version-tracked, pull-at-turn-boundary, no race conditions |
-| **16b** | Watcher preemption fix -- alert queueing during active turns, task state checkpoint |
-| **16c** | Negative knowledge -- `prohibited_patterns.md` injected into system prompt |
-| **16d** | `query_machine_logs` -- filtered OS event log queries before LLM context |
-| **16e** | `diff_machine_state` -- runtime process/port/driver diff vs boot baseline |
-| **16f** | Skill trust chain -- unverified skills blocked (Tier 2), CORAL platform filtering, circular crystallization prevention |
+| Phase | Version | What shipped |
+|-------|---------|-------------|
+| **1** | v1.0 | Portable launchers (Windows/macOS/Linux), chat, shell + file tools, basic memory |
+| **2** | v1.1 | Web fetch, live web search, patch/diff editing, multi-step task runner (`/task`) |
+| **3** | v1.2 | Rolling session summaries, session save/resume, auto-compression at 40 messages |
+| **4** | v2.0 | Multi-provider (OpenAI + Anthropic), semantic recall via embeddings |
+| **5** | v2.1 | Multi-agent system, skill library, full web UI, tool output compression |
+| **6** | v2.2 | Machine capability detection at boot, portable Python + Loki scanner |
+| **8** | v3.0 | Tiered autonomy -- `classifyRisk()` replaces flat DESTRUCTIVE set (Tier 0/1/2) |
+| **9** | v3.0 | Auto-crystallization -- post-task cheap-model hook saves repeatable patterns as skills |
+| **10** | v3.0 | Instinct auto-promotion -- conf-scored patterns promoted to `instincts.md` after 3+ sessions |
+| **11** | v3.0 | Longitudinal machine records -- UUID, visit history, capability drift tracking |
+| **12** | v3.0 | Proactive watcher -- disk, KP41 crashes, CPU temp, network change monitoring |
+| **13-15** | v3.0 | CORAL peer learning, API failover (OpenAI <-> Anthropic) |
+| **16a** | v3.0 | CORAL versioned pull model -- version-tracked, pull-at-turn-boundary, no race conditions |
+| **16b** | v3.0 | Watcher preemption fix -- alert queueing during active turns, task state checkpoint |
+| **16c** | v3.0 | Negative knowledge -- `prohibited_patterns.md` injected into system prompt |
+| **16d** | v3.0 | `query_machine_logs` -- filtered OS event log queries before LLM context |
+| **16e** | v3.0 | `diff_machine_state` -- runtime process/port/driver diff vs boot baseline |
+| **16f** | v3.0 | Skill trust chain -- unverified skills blocked (Tier 2), CORAL platform filtering, circular crystallization prevention |
+| **17** | v3.1 | Offline-first architecture -- L2 Control Engine (deterministic diagnostics, zero dependencies), L3 local LLM via llama.cpp (non-blocking, Phi-3.5-mini ~2.2 GB). Graceful degradation: Cloud AI -> Local AI -> Control Engine. Also: BM25 offline recall, skill versioning + rollback, token-aware compression, memory GC (dedup/contradiction/decay), error telemetry, expanded watcher (RAM/CPU/battery/login/reboot + alert correlation), sudo lockout |
