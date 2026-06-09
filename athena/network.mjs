@@ -1,4 +1,4 @@
-// network.mjs — Network situational awareness (Pillar 4)
+// network.mjs -- Network situational awareness (Pillar 4)
 import { exec } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { promisify } from 'node:util';
@@ -126,7 +126,7 @@ export async function handleNetworkScanTool(args) {
       const nmapOut = await probe(`nmap -sV --open -T4 ${target} 2>/dev/null`, 'nmap');
       lines.push(nmapOut || '  (no output)');
     } else {
-      lines.push('  nmap not available — install it for deep port scanning.');
+      lines.push('  nmap not available -- install it for deep port scanning.');
     }
     lines.push('');
   }

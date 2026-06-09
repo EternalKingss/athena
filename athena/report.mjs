@@ -1,4 +1,4 @@
-// report.mjs — Professional Markdown report generation (Pillar 3)
+// report.mjs -- Professional Markdown report generation (Pillar 3)
 import { getCachedCapabilities } from './capabilities.mjs';
 import { assessThreatSurface, formatThreatReport } from './threat.mjs';
 import { handleNetworkScanTool } from './network.mjs';

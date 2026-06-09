@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// ATHENA — portable AI agent. Lives on a drive, runs on any machine.
+// ATHENA -- portable AI agent. Lives on a drive, runs on any machine.
 // v4.0: modular architecture, Athena personality, self-building skills, web browsing.
-// Zero npm dependencies — only Node built-ins.
+// Zero npm dependencies -- only Node built-ins.
 
 import * as readline from 'node:readline/promises';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
@@ -59,7 +59,7 @@ async function runCLI() {
   const messages = freshMessages();
   _activeMessages = messages;
 
-  // Readline with history — arrow keys cycle through previous inputs
+  // Readline with history -- arrow keys cycle through previous inputs
   const rl = readline.createInterface({
     input:  process.stdin,
     output: process.stdout,
@@ -68,7 +68,7 @@ async function runCLI() {
   });
   const ask = q => rl.question(q);
 
-  // Prune old session files in the background — non-blocking
+  // Prune old session files in the background -- non-blocking
   pruneOldSessions().catch(() => {});
 
   let closing = false;
@@ -84,7 +84,7 @@ async function runCLI() {
   process.on('SIGINT', () => {
     if (isActive()) {
       setInterrupt();
-      process.stdout.write(dim('\n  [interrupted — generating summary…]\n'));
+      process.stdout.write(dim('\n  [interrupted -- generating summary…]\n'));
     } else {
       close();
     }
@@ -109,7 +109,7 @@ async function runCLI() {
     if (input === '/stop') {
       if (isActive()) {
         setInterrupt();
-        console.log(dim('  [interrupting — will summarise when current tool finishes]\n'));
+        console.log(dim('  [interrupting -- will summarise when current tool finishes]\n'));
       } else {
         console.log(dim('  nothing running\n'));
       }
@@ -167,11 +167,11 @@ async function runCLI() {
       const name = rest.slice(0, spaceIdx).trim();
       const goal = rest.slice(spaceIdx + 1).trim();
       const id = spawnAgent(name, goal, cliEmit);
-      console.log(cyan(`  Agent "${name}" spawned (${id}) — running in background\n`));
+      console.log(cyan(`  Agent "${name}" spawned (${id}) -- running in background\n`));
       continue;
     }
 
-    // /agents — list pool
+    // /agents -- list pool
     if (input === '/agents') {
       const agents = listAgents();
       if (!agents.length) { console.log(dim('  no agents running\n')); continue; }
@@ -192,7 +192,7 @@ async function runCLI() {
 }
 
 // ---- Entry point ----
-// Fire capability detection in the background — HDD-friendly, non-blocking.
+// Fire capability detection in the background -- HDD-friendly, non-blocking.
 // All boot intelligence runs in this .then() so the UI is immediately responsive.
 let _activeMessages = null;
 detectCapabilities()
@@ -201,7 +201,7 @@ detectCapabilities()
     if (_activeMessages?.[0]?.role === 'system') _activeMessages[0].content = systemPrompt();
 
     // Auto-greet: make Athena speak on startup without being asked.
-    // Only run full boot_triage when it hasn't run in the last 6 hours — otherwise
+    // Only run full boot_triage when it hasn't run in the last 6 hours -- otherwise
     // just greet from memory so every session doesn't feel like a first-time setup.
     const SIX_HOURS_MS  = 6 * 60 * 60 * 1000;
     const { loadFingerprint } = await import('./machines.mjs');
@@ -226,7 +226,7 @@ detectCapabilities()
       const _sessCount = (() => { try { return readdirSync(PATHS.sessDir).filter(f => f.endsWith('.jsonl') && f !== '.gitkeep').length; } catch { return 0; } })();
       const _sessNote  = _sessCount > 1 ? ' Session ' + _sessCount + ' with this user.' : ' First session on this drive.';
       const _diffInstruction = _bootAgo ? ' Also run machine_diff to show what changed since last visit.' : '';
-      const bootMsg = '[auto-boot] ' + _bootCtx + _sessNote + ' Run boot_triage and machine_info.' + _diffInstruction + ' Greet with a sharp status report — what you found, what matters, what to watch. No fluff.';
+      const bootMsg = '[auto-boot] ' + _bootCtx + _sessNote + ' Run boot_triage and machine_info.' + _diffInstruction + ' Greet with a sharp status report -- what you found, what matters, what to watch. No fluff.';
       if (UI_MODE) {
         queueBootInput(bootMsg);
       } else if (_activeMessages?.length === 1 && _globalEmit && !isActive()) {
@@ -234,7 +234,7 @@ detectCapabilities()
         await turn(_activeMessages, _globalEmit).catch(() => {});
       }
     } else {
-      // Recent check — skip LLM boot. CLI: quiet status line. UI: buffered system msg.
+      // Recent check -- skip LLM boot. CLI: quiet status line. UI: buffered system msg.
       const { loadFingerprint: lf } = await import('./machines.mjs');
       const fp2 = lf();
       const _recentAgo = fp2?.capturedAt
@@ -245,11 +245,11 @@ detectCapabilities()
           })()
         : 'unknown';
       if (UI_MODE) {
-        // Buffer the status — will be delivered when browser connects via SSE drain
-        uiEmit({ type: 'system', text: 'Triage ran ' + _recentAgo + ' — ready.' });
+        // Buffer the status -- will be delivered when browser connects via SSE drain
+        uiEmit({ type: 'system', text: 'Triage ran ' + _recentAgo + ' -- ready.' });
         uiEmit({ type: 'done' });
       } else if (_globalEmit) {
-        process.stdout.write(dim('  triage last ran ' + _recentAgo + ' — type to start\n\n'));
+        process.stdout.write(dim('  triage last ran ' + _recentAgo + ' -- type to start\n\n'));
       }
     }
 
@@ -274,7 +274,7 @@ if (UI_MODE) {
     if (caps) await Promise.all([saveFingerprint(caps), logAuditEvent('session_end')]).catch(() => {});
     process.exit(0);
   };
-  // SIGINT = Ctrl-C, SIGTERM = tab close / process manager kill — both save
+  // SIGINT = Ctrl-C, SIGTERM = tab close / process manager kill -- both save
   process.on('SIGINT',  uiShutdown);
   process.on('SIGTERM', uiShutdown);
   await serveUI(_activeMessages);

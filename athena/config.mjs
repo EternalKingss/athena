@@ -1,4 +1,4 @@
-// config.mjs — env loading and all runtime constants
+// config.mjs -- env loading and all runtime constants
 import { readFileSync, existsSync } from 'node:fs';
 import { PATHS } from './paths.mjs';
 
@@ -26,7 +26,7 @@ export const ANTHROPIC_KEY    = CFG.ANTHROPIC_API_KEY || process.env.ANTHROPIC_A
 export const ANTHROPIC_BASE   = 'https://api.anthropic.com/v1';
 export const ANTHROPIC_VERSION = '2023-06-01';
 
-// Mutable active model — changed by /model command and UI selector
+// Mutable active model -- changed by /model command and UI selector
 export const state = { activeModel: MODEL };
 
 export const CURATED_MODELS = [

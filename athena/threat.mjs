@@ -1,4 +1,4 @@
-// threat.mjs — Threat surface assessment with risk scoring (Pillar 7)
+// threat.mjs -- Threat surface assessment with risk scoring (Pillar 7)
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { getCachedCapabilities } from './capabilities.mjs';
@@ -43,7 +43,7 @@ async function getListeningPorts() {
 
 async function getUnusualSUID() {
   if (isWin || isMac) return [];
-  // Known-safe SUID binaries (partial match is fine — we just want to skip the obvious ones)
+  // Known-safe SUID binaries (partial match is fine -- we just want to skip the obvious ones)
   const SAFE = new Set(['sudo', 'su', 'passwd', 'gpasswd', 'newgrp', 'chsh', 'chfn', 'mount', 'umount', 'ping', 'unix_chkpwd', 'pkexec', 'crontab', 'at']);
   const out  = await probe('find /usr /bin /sbin /usr/local -perm /4000 -type f 2>/dev/null | head -40', 'suid');
   return out.split('\n').filter(Boolean)
@@ -86,7 +86,7 @@ export async function assessThreatSurface() {
   const dangerous = openPorts.filter(p => SENSITIVE_PORTS.has(p));
   if (openPorts.length > 12) {
     score += 8;
-    findings.push({ severity: 'medium', text: `${openPorts.length} listening ports — consider reducing attack surface` });
+    findings.push({ severity: 'medium', text: `${openPorts.length} listening ports -- consider reducing attack surface` });
   }
   if (dangerous.length) {
     score += dangerous.length * 7;
@@ -94,7 +94,7 @@ export async function assessThreatSurface() {
   }
   if (openPorts.includes(22)) {
     score += 5;
-    findings.push({ severity: 'medium', text: 'SSH (port 22) is open — verify key-based auth is enforced and root login disabled' });
+    findings.push({ severity: 'medium', text: 'SSH (port 22) is open -- verify key-based auth is enforced and root login disabled' });
   }
 
   // Firewall
@@ -110,7 +110,7 @@ export async function assessThreatSurface() {
   const hasFail2ban = sec.some(s => s.includes('fail2ban'));
   if (!hasFail2ban && !isWin && openPorts.includes(22)) {
     score += 8;
-    findings.push({ severity: 'medium', text: 'No fail2ban detected — SSH brute-force protection is absent' });
+    findings.push({ severity: 'medium', text: 'No fail2ban detected -- SSH brute-force protection is absent' });
   }
 
   // AV
@@ -138,7 +138,7 @@ export async function assessThreatSurface() {
   // Service count
   if (services.length > 35) {
     score += 5;
-    findings.push({ severity: 'low', text: `${services.length} running services — large attack surface` });
+    findings.push({ severity: 'low', text: `${services.length} running services -- large attack surface` });
   }
 
   score = Math.min(score, 100);
@@ -157,7 +157,7 @@ export async function assessThreatSurface() {
 export function formatThreatReport(threat) {
   const lines = [
     `## Threat Surface Assessment`,
-    `**Risk Score:** ${threat.score}/100 — **${threat.level}**`,
+    `**Risk Score:** ${threat.score}/100 -- **${threat.level}**`,
     '',
   ];
 
