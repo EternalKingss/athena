@@ -373,13 +373,13 @@ function esc(s) {
 }
 function fmt(s) {
   // inline code
-  s = s.replace(/\`([^\`\n]+)\`/g,'<code>$1</code>');
+  s = s.replace(/\\\`([^\\\`\\n]+)\\\`/g,'<code>$1</code>');
   // bold
-  s = s.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');
+  s = s.replace(/\\*\\*([^*]+)\\*\\*/g,'<strong>$1</strong>');
   // bold single
-  s = s.replace(/\*([^*\n]+)\*/g,'<em>$1</em>');
+  s = s.replace(/\\*([^*\\n]+)\\*/g,'<em>$1</em>');
   // newlines
-  s = s.replace(/\n/g,'<br>');
+  s = s.replace(/\\n/g,'<br>');
   return s;
 }
 function ts() { return new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}); }
