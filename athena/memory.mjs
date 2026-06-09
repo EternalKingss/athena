@@ -6,6 +6,8 @@ import { PATHS } from './paths.mjs';
 import { MEM_CHAR_LIMIT } from './config.mjs';
 import { chat } from './api.mjs';
 import { embedAndStore, extractTags } from './embed.mjs';
+import { runMemoryGC } from './memory_gc.mjs';
+import { logError } from './telemetry.mjs';
 
 // ---- Session file pruning -- keeps last 60 days, max 100 files ----
 export async function pruneOldSessions() {
@@ -137,7 +139,7 @@ export async function handleMemoryTool(args) {
       text: args.content.trim(),
       type: 'memory',
       tags: [...extractTags(args.content), args.target],
-    }).catch(e => console.error('[memory] embed failed:', e.message));
+    }).catch(e => logError('memory.embed.add', e));
     return `Added. ${usageStr(newEntries)}`;
   }
 
@@ -154,7 +156,7 @@ export async function handleMemoryTool(args) {
       text: args.content.trim(),
       type: 'memory',
       tags: [...extractTags(args.content), args.target],
-    }).catch(e => console.error('[memory] embed failed:', e.message));
+    }).catch(e => logError('memory.embed.replace', e));
     return `Replaced. ${usageStr(entries)}`;
   }
 
@@ -254,12 +256,15 @@ export async function saveAndSummarize(messages, isAgent = false) {
       text: `Session ${ts}: ${summary}`,
       type: 'session',
       tags,
-    }).catch(e => console.error('[memory] session embed failed:', e.message));
-  } catch (e) { console.error('[memory] summarize failed:', e.message); }
+    }).catch(e => logError('memory.embed.session', e));
+  } catch (e) { logError('memory.summarize', e); }
 
   // ---- Phase 10: instinct auto-promotion ----
   // Runs after every non-agent session. Promotes high-confidence candidates automatically.
   autoPromoteInstincts().catch(() => {});
+
+  // Memory GC: dedup, contradiction resolution, decay (runs every 5th session)
+  runMemoryGC().catch(e => logError('memory.gc', e));
 }
 
 // ---- Scan recent sessions for candidate instincts ----

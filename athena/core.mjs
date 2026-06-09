@@ -2,9 +2,10 @@
 import { chat, chatStream } from './api.mjs';
 import { TOOLS, DESTRUCTIVE, classifyRisk, runTool } from './tools.mjs';
 import { loadFingerprint } from './machines.mjs';
-import { saveSkill, updateSkill, scanSkills } from './skills.mjs';
-import { systemPrompt } from './personality.mjs';
-import { AUTO, state, API_KEY, ANTHROPIC_KEY } from './config.mjs';
+import { saveSkill, updateSkill, scanSkills, recordSkillResult } from './skills.mjs';
+import { systemPrompt, offlineSystemPrompt } from './personality.mjs';
+import { AUTO, state, API_KEY, ANTHROPIC_KEY, isOfflineMode } from './config.mjs';
+import { estimateMessages, getModelBudget } from './tokens.mjs';
 import { compressOutput } from './compress.mjs';
 
 // ---- Session state ----
@@ -25,12 +26,15 @@ const _noopInput = async (question) => `(background agent -- cannot ask user: ${
 
 
 // ---- Context compression ----
-const COMPRESS_AT        = 40;
 const COMPRESS_KEEP_START = 2;
 const COMPRESS_KEEP_END   = 15;
 
 async function maybeCompress(messages, emit, currentTodos = []) {
-  if (messages.length < COMPRESS_AT) return;
+  // Token-aware: compress when estimated tokens reach 75% of model budget,
+  // OR as a safety net when message count hits 80 (prevents unbounded growth).
+  const tokenBudget = getModelBudget(state.activeModel);
+  const estimated   = estimateMessages(messages);
+  if (estimated < tokenBudget * 0.75 && messages.length < 80) return;
   const start  = messages.slice(0, COMPRESS_KEEP_START);
   let end      = messages.slice(-COMPRESS_KEEP_END);
   let middle   = messages.slice(COMPRESS_KEEP_START, -COMPRESS_KEEP_END);
@@ -57,11 +61,12 @@ async function maybeCompress(messages, emit, currentTodos = []) {
 
   if (middle.length < 4) return; // not worth compressing after boundary adjustments
 
-  emit({ type: 'system', text: `Compressing ${middle.length} messages to stay within context…` });
+  emit({ type: 'system', text: `Compressing ${middle.length} messages (~${estimated} tokens estimated, budget ${tokenBudget})…` });
   // Use cheapest available model for compression -- no reason to burn expensive tokens on housekeeping
   const savedModel = state.activeModel;
   if (API_KEY) state.activeModel = 'gpt-4o-mini';
   else if (ANTHROPIC_KEY) state.activeModel = 'claude-haiku-4-5-20251001';
+  // else: offline mode -- local model stays active for compression
   try {
     const sum = await chat([
       { role: 'system', content: 'Summarize this conversation in 10-15 bullet points. Be specific: include filenames, commands, values, decisions, problems solved, current state. No preamble.' },
@@ -74,7 +79,7 @@ async function maybeCompress(messages, emit, currentTodos = []) {
     messages.length = 0;
     messages.push(...start, summary, ...todoReinject, ...end);
     emit({ type: 'system', text: `Compressed (${middle.length} → 1). Continuing…` });
-  } catch { /* non-fatal */ } finally {
+  } catch (e) { import('./telemetry.mjs').then(({ logError }) => logError('compression', e)).catch(() => {}); } finally {
     state.activeModel = savedModel;
   }
 }
@@ -96,6 +101,8 @@ export async function turn(messages, emit, opts = {}) {
   const MAX_TOOL_ITERATIONS = 50;
   let toolIterations = 0;
   const onTurnStart = opts.onTurnStart || null;
+  let _lastLoadedSkill = null;
+  let _hadToolError    = false;
 
   // ---- Loop / stall detection (Agent Introspection) ----
   // Tracks the last N tool calls. If the same tool+args combo repeats 3x in a row
@@ -161,6 +168,7 @@ export async function turn(messages, emit, opts = {}) {
           if (drainPendingAlerts) drainPendingAlerts(emit);
         } catch {}
       }
+      if (_lastLoadedSkill) { recordSkillResult(_lastLoadedSkill, !_hadToolError); _lastLoadedSkill = null; }
       emit({ type: 'done' }); return;
     }
     toolIterations++;
@@ -218,6 +226,17 @@ export async function turn(messages, emit, opts = {}) {
       }
       const compressed = compressOutput(String(result), call.function.name);
       toolResults.push({ role: 'tool', tool_call_id: call.id, content: compressed });
+
+      // Skill success/failure tracking
+      if (call.function.name === 'load_skill' && args.name) {
+        const r = String(result);
+        if (!r.startsWith('Skill "') && !r.startsWith('Error:')) _lastLoadedSkill = args.name;
+      }
+      if (String(result).startsWith('Error: ') && _lastLoadedSkill) {
+        recordSkillResult(_lastLoadedSkill, false);
+        _lastLoadedSkill = null;
+        _hadToolError = true;
+      }
 
       // Loop detection -- same tool+args 3x in a row = inject introspection prompt
       if (detectLoop(call.function.name, args)) loopDetected = true;
@@ -330,7 +349,10 @@ export async function runTask(goal, messages, emit) {
   const CRYSTALLIZE_MIN_TOOLS = 4;
   const primitiveTrace = toolTrace.filter(t => t.name !== 'load_skill');
   if (primitiveTrace.length >= CRYSTALLIZE_MIN_TOOLS) {
-    crystallize(goal, primitiveTrace, emit).catch(() => {});
+    crystallize(goal, primitiveTrace, emit).catch(e => {
+      // Non-fatal -- crystallization failures are best-effort
+      import('./telemetry.mjs').then(({ logError }) => logError('crystallize', e)).catch(() => {});
+    });
   }
 }
 
@@ -339,6 +361,7 @@ export async function crystallize(goal, toolTrace, emit) {
   const savedModel = state.activeModel;
   if (API_KEY) state.activeModel = 'gpt-4o-mini';
   else if (ANTHROPIC_KEY) state.activeModel = 'claude-haiku-4-5-20251001';
+  // else: offline mode -- local model stays active for crystallization
   try {
     const traceText = toolTrace.map(t =>
       t.name + '(' + Object.entries(t.args || {}).map(([k, v]) => k + '=' + JSON.stringify(v).slice(0, 60)).join(', ') + ')'
@@ -368,7 +391,70 @@ let _broadcastSkill = () => {};
 export function setBroadcastSkill(fn) { _broadcastSkill = fn; }
 function broadcastSkill(...args) { _broadcastSkill(...args); }
 
-// ---- Fresh message array factory ----
+// ---- Fresh message array factory -- mode-aware ----
 export function freshMessages() {
-  return [{ role: 'system', content: systemPrompt() }];
+  return [{ role: 'system', content: isOfflineMode() ? offlineSystemPrompt() : systemPrompt() }];
+}
+
+// ---- L2/L3/L4 routing: turnWithFallback ----
+// L2 (Control Engine) handles known diagnostic intents deterministically.
+// L3 (local LLM) handles ambiguous intent when no cloud key.
+// L4 (cloud LLM) handles everything when available.
+// L2 state truth is immutable -- L3/L4 may only annotate, not contradict.
+export async function turnWithFallback(messages, emit, opts = {}) {
+  const hasCloud = !isOfflineMode();
+  const hasLocal = !hasCloud && await import('./local_llm.mjs').then(m => m.isLocalLLMRunning()).catch(() => false);
+  const hasLLM   = hasCloud || hasLocal;
+
+  // L2: check if input maps to a known workflow
+  const { detectIntents, runPlan } = await import('./control_engine.mjs');
+  const lastUser = [...messages].reverse().find(m => m.role === 'user');
+  const input    = typeof lastUser?.content === 'string' ? lastUser.content : '';
+  const intents  = detectIntents(input);
+
+  if (intents) {
+    // L2 handles this -- run deterministic plan regardless of LLM availability
+    emit({ type: 'status', text: 'running' });
+    emit({ type: 'stream_start' });
+    const report = await runPlan(intents, emit);
+    // If LLM available, append AI interpretation (annotate only, never override)
+    if (hasLLM) {
+      emit({ type: 'token', content: report });
+      messages.push({ role: 'assistant', content: report });
+      // Feed to LLM as context for interpretation
+      messages.push({ role: 'user', content: '[L2 diagnostic report above -- please interpret and summarize key findings. Do NOT contradict the DATA or STATUS fields.]' });
+      emit({ type: 'stream_end' });
+      return turn(messages, emit, opts);
+    }
+    emit({ type: 'token', content: report });
+    emit({ type: 'stream_end' });
+    messages.push({ role: 'assistant', content: report });
+    emit({ type: 'done' });
+    return;
+  }
+
+  if (hasLLM) {
+    // Unknown intent but LLM available -- let it handle
+    return turn(messages, emit, opts);
+  }
+
+  // No LLM, no known intent -- show capability list
+  const { listWorkflows } = await import('./control_engine.mjs');
+  const wfList = listWorkflows().map(w => '  ' + w.name).join('\n');
+  emit({ type: 'status', text: 'done' });
+  emit({ type: 'stream_start' });
+  const msg = [
+    '[Control Engine -- no AI model available]',
+    '',
+    'I cannot interpret this request without AI reasoning.',
+    'Available direct diagnostics (just describe what you need):',
+    wfList,
+    '',
+    'To enable AI reasoning: run runtime/get-offline.sh  (~2.2 GB download)',
+    'Or add OPENAI_API_KEY / ANTHROPIC_API_KEY to config/.env',
+  ].join('\n');
+  emit({ type: 'token', content: msg });
+  emit({ type: 'stream_end' });
+  messages.push({ role: 'assistant', content: msg });
+  emit({ type: 'done' });
 }

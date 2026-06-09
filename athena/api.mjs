@@ -2,7 +2,7 @@
 import {
   API_KEY, BASE,
   ANTHROPIC_KEY, ANTHROPIC_BASE, ANTHROPIC_VERSION,
-  CURATED_MODELS, state,
+  CURATED_MODELS, LOCAL_LLM_PORT, isOfflineMode, state,
 } from './config.mjs';
 
 // ---- Model-switch broadcast callback (set by ui.mjs) ----
@@ -11,6 +11,9 @@ export function setModelSwitchCallback(fn) { _onModelSwitch = fn; }
 
 // ---- Provider detection for a given model ----
 function providerForModel(model) {
+  if (model.startsWith('local-')) {
+    return { provider: 'local', base: 'http://127.0.0.1:' + LOCAL_LLM_PORT + '/v1', key: 'local' };
+  }
   if (model.startsWith('claude-')) {
     if (!ANTHROPIC_KEY) return null;
     return { provider: 'anthropic', base: ANTHROPIC_BASE, key: ANTHROPIC_KEY };
@@ -65,6 +68,11 @@ function buildFallbackList() {
     for (const g of CURATED_MODELS) for (const m of (g.models || [])) {
       if (m !== current) result.push(m);
     }
+  }
+  if (isOfflineMode()) {
+    const local  = result.filter(m => m.startsWith('local-'));
+    const others = result.filter(m => !m.startsWith('local-'));
+    return [...local, ...others];
   }
   return result;
 }

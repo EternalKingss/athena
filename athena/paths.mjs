@@ -27,15 +27,24 @@ export const PATHS = {
   skills:   join(ROOT, 'skills'),
   tools:    join(ROOT, 'tools'),
 
+  errorsLog:  join(ROOT, 'data', 'memory', 'errors.jsonl'),
+  gcState:    join(ROOT, 'data', 'memory', 'gc_state.json'),
+  sudoState:  join(ROOT, 'data', 'memory', 'sudo_attempts.json'),
+
   // Portable runtimes bundled on the drive
   runtime:    RUNTIME,
   python:     isWin ? join(RUNTIME, 'python', 'python.exe')     : join(RUNTIME, 'python', 'bin', 'python3'),
   pythonBin:  isWin ? join(RUNTIME, 'python')                   : join(RUNTIME, 'python', 'bin'),
   pythonPkg:  isWin ? join(RUNTIME, 'python', 'Scripts')        : join(RUNTIME, 'python', 'bin'),
   lokiPy:     join(ROOT, 'tools', 'loki', 'loki.py'),
+
+  // Offline mode -- local LLM runtime
+  modelsDir:   join(ROOT, 'runtime', 'models'),
+  llamaServer: isWin ? join(RUNTIME, 'llama', 'llama-server.exe') : join(RUNTIME, 'llama', 'llama-server'),
+  llamaLog:    join(ROOT, 'data', 'llm_server.log'),
 };
 
 // Ensure required dirs exist at startup -- soft-fail on read-only drives
-for (const d of [PATHS.sessDir, PATHS.memDir, PATHS.skills, PATHS.tools]) {
+for (const d of [PATHS.sessDir, PATHS.memDir, PATHS.skills, PATHS.tools, PATHS.modelsDir]) {
   try { mkdirSync(d, { recursive: true }); } catch { /* read-only mount -- continue */ }
 }
