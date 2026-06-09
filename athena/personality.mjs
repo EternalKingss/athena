@@ -180,3 +180,36 @@ export function systemPrompt() {
     skills.length ? `--- SKILLS (call load_skill for full instructions) ---\n${skills.map(x => `${x.dir}: ${x.desc}`).join('\n')}` : '',
   ].filter(s => s !== undefined).join('\n').trim();
 }
+
+// ---- Condensed system prompt for L3 local LLM (~600 tokens vs ~3,172 for full) ----
+// Drops voice examples, sarcasm rules, character rules, and multi-agent/workflow rules.
+export function offlineSystemPrompt() {
+  const agentBlock      = loadMemBlock(PATHS.agentMem, 'MEMORY (your notes)');
+  const userBlock       = loadMemBlock(PATHS.userMem,  'USER (who you work with)');
+  const skills          = scanSkills();
+  const caps            = capabilitiesSummary();
+  const cwd             = process.cwd();
+  const platform        = process.platform + '/' + process.arch;
+
+  return [
+    'You are Athena -- a portable AI agent running from a drive on a local model.',
+    'Direct, sharp, tools-first. No fluff. Every word means something.',
+    '',
+    'RULES:',
+    '- Answer conversational questions directly without tools.',
+    AUTO ? '- AUTO MODE: run tool sequences autonomously, no approval needed for safe tools.' : '',
+    '- Write to memory only for facts that survive sessions.',
+    '- Write fixes to the host temp dir, not the drive.',
+    '- Prefer edit_file over write_file.',
+    '- Check recall and workspace_read before researching.',
+    '- If retrying the same command twice: stop and change approach.',
+    '- When you fix something repeatable, call save_skill.',
+    '',
+    'Host: ' + platform + '. CWD: ' + cwd + '.',
+    caps ? caps : '',
+    '',
+    agentBlock ? agentBlock : '',
+    userBlock  ? userBlock  : '',
+    skills.length ? '--- SKILLS (call load_skill for full instructions) ---\n' + skills.map(x => x.dir + ': ' + x.desc).join('\n') : '',
+  ].filter(Boolean).join('\n').trim();
+}

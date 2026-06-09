@@ -13,6 +13,7 @@ const MODEL_BUDGETS = {
   'claude-opus-4-8':           180000,
   'claude-sonnet-4-6':         180000,
   'claude-haiku-4-5-20251001': 180000,
+  'local-':                  8192,
 };
 
 const DEFAULT_BUDGET = 100000;

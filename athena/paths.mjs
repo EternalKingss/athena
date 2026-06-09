@@ -37,9 +37,14 @@ export const PATHS = {
   pythonBin:  isWin ? join(RUNTIME, 'python')                   : join(RUNTIME, 'python', 'bin'),
   pythonPkg:  isWin ? join(RUNTIME, 'python', 'Scripts')        : join(RUNTIME, 'python', 'bin'),
   lokiPy:     join(ROOT, 'tools', 'loki', 'loki.py'),
+
+  // Offline mode -- local LLM runtime
+  modelsDir:   join(ROOT, 'runtime', 'models'),
+  llamaServer: isWin ? join(RUNTIME, 'llama', 'llama-server.exe') : join(RUNTIME, 'llama', 'llama-server'),
+  llamaLog:    join(ROOT, 'data', 'llm_server.log'),
 };
 
 // Ensure required dirs exist at startup -- soft-fail on read-only drives
-for (const d of [PATHS.sessDir, PATHS.memDir, PATHS.skills, PATHS.tools]) {
+for (const d of [PATHS.sessDir, PATHS.memDir, PATHS.skills, PATHS.tools, PATHS.modelsDir]) {
   try { mkdirSync(d, { recursive: true }); } catch { /* read-only mount -- continue */ }
 }

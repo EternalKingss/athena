@@ -6,17 +6,19 @@
 import * as readline from 'node:readline/promises';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 
-import { NAME, MODEL, state } from './config.mjs';
+import { NAME, MODEL, state, _hasKey, LOCAL_LLM_PORT, isOfflineMode, registerLocalModel } from './config.mjs';
 import { PATHS } from './paths.mjs';
-import { systemPrompt } from './personality.mjs';
+import { systemPrompt, offlineSystemPrompt } from './personality.mjs';
 import { saveAndSummarize, pruneOldSessions } from './memory.mjs';
-import { turn, runTask, setRequestUserInput, freshMessages, setInterrupt, isActive } from './core.mjs';
+import { turn, runTask, setRequestUserInput, freshMessages, setInterrupt, isActive, turnWithFallback } from './core.mjs';
 import { serveUI, uiEmit, queueBootInput } from './ui.mjs';
 import { setAgentFunctions } from './tools.mjs';
 import { spawnAgent, listAgents, workspaceRead, workspaceWrite } from './agents.mjs';
 import { detectCapabilities, getCachedCapabilities } from './capabilities.mjs';
 import { checkMachineReturn, saveFingerprint } from './machines.mjs';
 import { logAuditEvent } from './audit.mjs';
+
+import { detectLocalModel, startLocalLLM, stopLocalLLM, getLocalModelName } from './local_llm.mjs';
 
 const UI_MODE = process.argv.includes('--ui');
 
@@ -71,10 +73,22 @@ async function runCLI() {
   // Prune old session files in the background -- non-blocking
   pruneOldSessions().catch(() => {});
 
+  // Inform user of intelligence tier if no LLM configured
+  if (!_hasKey && !detectLocalModel()) {
+    console.log(dim([
+      '',
+      '  [L2 mode] Running on Control Engine only -- no AI model configured.',
+      '  For AI:  add OPENAI_API_KEY or ANTHROPIC_API_KEY to config/.env',
+      '  Offline: run runtime/get-offline.sh  (~2.2 GB download)',
+      '',
+    ].join('\n')));
+  }
+
   let closing = false;
   const close = async () => {
     if (closing) return; closing = true;
     console.log('');
+    await stopLocalLLM().catch(() => {});
     await saveAndSummarize(messages);
     const caps = getCachedCapabilities();
     if (caps) await Promise.all([saveFingerprint(caps), logAuditEvent('session_end')]).catch(() => {});
@@ -139,7 +153,7 @@ async function runCLI() {
 
     if (input === '/forget') {
       messages.length = 0;
-      messages.push({ role: 'system', content: systemPrompt() });
+      messages.push({ role: 'system', content: isOfflineMode() ? offlineSystemPrompt() : systemPrompt() });
       messages.push({ role: 'user', content: '[system] Context cleared. Long-term memory files intact. Session conversation history is gone.' });
       messages.push({ role: 'assistant', content: 'Got it. Context cleared. Memory files intact. What now?' });
       console.log(dim('  context cleared\n')); continue;
@@ -155,7 +169,7 @@ async function runCLI() {
     if (input.startsWith('/task ')) {
       const goal = input.slice(6).trim();
       if (!goal) { console.log(dim('  usage: /task <goal>\n')); continue; }
-      try { await runTask(goal, messages, cliEmit); } catch (e) { console.log(`\n  error: ${e.message}\n`); }
+      try { await runTask(goal, messages, cliEmit, turnWithFallback); } catch (e) { console.log(`\n  error: ${e.message}\n`); }
       continue;
     }
 
@@ -185,20 +199,35 @@ async function runCLI() {
     }
 
     messages.push({ role: 'user', content: input });
-    try { await turn(messages, cliEmit); } catch (e) { console.log(`\n  error: ${e.message}\n`); }
+    try { await turnWithFallback(messages, cliEmit); } catch (e) { console.log(`\n  error: ${e.message}\n`); }
     // Auto-save after every turn so crashes/kills don't lose the session
     saveAndSummarize(messages).catch(() => {});
   }
 }
 
 // ---- Entry point ----
+// ---- Local LLM startup (non-blocking -- L2 is always available immediately) ----
+{
+  const modelPath = detectLocalModel();
+  if (modelPath) {
+    const modelId = getLocalModelName() || ('local-' + modelPath.split('/').pop().replace(/\.gguf$/i, '').toLowerCase().replace(/[\s_.]+/g, '-'));
+    registerLocalModel(modelId);
+    // Fire and forget -- Athena is immediately usable at L2 while LLM loads in background
+    const emit = ev => { if (_globalEmit) _globalEmit(ev); };
+    startLocalLLM(LOCAL_LLM_PORT, emit).catch(() => {});
+  } else if (!_hasKey) {
+    // No cloud key AND no local model -- Control Engine (L2) only mode
+    // Will be printed once CLI is ready
+  }
+}
+
 // Fire capability detection in the background -- HDD-friendly, non-blocking.
 // All boot intelligence runs in this .then() so the UI is immediately responsive.
 let _activeMessages = null;
 detectCapabilities()
   .then(async caps => {
     // Backfill system prompt with fresh machine data
-    if (_activeMessages?.[0]?.role === 'system') _activeMessages[0].content = systemPrompt();
+    if (_activeMessages?.[0]?.role === 'system') _activeMessages[0].content = isOfflineMode() ? offlineSystemPrompt() : systemPrompt();
 
     // Auto-greet: make Athena speak on startup without being asked.
     // Only run full boot_triage when it hasn't run in the last 6 hours -- otherwise
@@ -269,6 +298,7 @@ if (UI_MODE) {
   pruneOldSessions().catch(() => {});
 
   const uiShutdown = async () => {
+    await stopLocalLLM().catch(() => {});
     await saveAndSummarize(_activeMessages);
     const caps = getCachedCapabilities();
     if (caps) await Promise.all([saveFingerprint(caps), logAuditEvent('session_end')]).catch(() => {});

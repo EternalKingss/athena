@@ -3,8 +3,8 @@ import { chat, chatStream } from './api.mjs';
 import { TOOLS, DESTRUCTIVE, classifyRisk, runTool } from './tools.mjs';
 import { loadFingerprint } from './machines.mjs';
 import { saveSkill, updateSkill, scanSkills, recordSkillResult } from './skills.mjs';
-import { systemPrompt } from './personality.mjs';
-import { AUTO, state, API_KEY, ANTHROPIC_KEY } from './config.mjs';
+import { systemPrompt, offlineSystemPrompt } from './personality.mjs';
+import { AUTO, state, API_KEY, ANTHROPIC_KEY, isOfflineMode } from './config.mjs';
 import { estimateMessages, getModelBudget } from './tokens.mjs';
 import { compressOutput } from './compress.mjs';
 
@@ -66,6 +66,7 @@ async function maybeCompress(messages, emit, currentTodos = []) {
   const savedModel = state.activeModel;
   if (API_KEY) state.activeModel = 'gpt-4o-mini';
   else if (ANTHROPIC_KEY) state.activeModel = 'claude-haiku-4-5-20251001';
+  // else: offline mode -- local model stays active for compression
   try {
     const sum = await chat([
       { role: 'system', content: 'Summarize this conversation in 10-15 bullet points. Be specific: include filenames, commands, values, decisions, problems solved, current state. No preamble.' },
@@ -360,6 +361,7 @@ export async function crystallize(goal, toolTrace, emit) {
   const savedModel = state.activeModel;
   if (API_KEY) state.activeModel = 'gpt-4o-mini';
   else if (ANTHROPIC_KEY) state.activeModel = 'claude-haiku-4-5-20251001';
+  // else: offline mode -- local model stays active for crystallization
   try {
     const traceText = toolTrace.map(t =>
       t.name + '(' + Object.entries(t.args || {}).map(([k, v]) => k + '=' + JSON.stringify(v).slice(0, 60)).join(', ') + ')'
@@ -389,7 +391,70 @@ let _broadcastSkill = () => {};
 export function setBroadcastSkill(fn) { _broadcastSkill = fn; }
 function broadcastSkill(...args) { _broadcastSkill(...args); }
 
-// ---- Fresh message array factory ----
+// ---- Fresh message array factory -- mode-aware ----
 export function freshMessages() {
-  return [{ role: 'system', content: systemPrompt() }];
+  return [{ role: 'system', content: isOfflineMode() ? offlineSystemPrompt() : systemPrompt() }];
+}
+
+// ---- L2/L3/L4 routing: turnWithFallback ----
+// L2 (Control Engine) handles known diagnostic intents deterministically.
+// L3 (local LLM) handles ambiguous intent when no cloud key.
+// L4 (cloud LLM) handles everything when available.
+// L2 state truth is immutable -- L3/L4 may only annotate, not contradict.
+export async function turnWithFallback(messages, emit, opts = {}) {
+  const hasCloud = !isOfflineMode();
+  const hasLocal = !hasCloud && await import('./local_llm.mjs').then(m => m.isLocalLLMRunning()).catch(() => false);
+  const hasLLM   = hasCloud || hasLocal;
+
+  // L2: check if input maps to a known workflow
+  const { detectIntents, runPlan } = await import('./control_engine.mjs');
+  const lastUser = [...messages].reverse().find(m => m.role === 'user');
+  const input    = typeof lastUser?.content === 'string' ? lastUser.content : '';
+  const intents  = detectIntents(input);
+
+  if (intents) {
+    // L2 handles this -- run deterministic plan regardless of LLM availability
+    emit({ type: 'status', text: 'running' });
+    emit({ type: 'stream_start' });
+    const report = await runPlan(intents, emit);
+    // If LLM available, append AI interpretation (annotate only, never override)
+    if (hasLLM) {
+      emit({ type: 'token', content: report });
+      messages.push({ role: 'assistant', content: report });
+      // Feed to LLM as context for interpretation
+      messages.push({ role: 'user', content: '[L2 diagnostic report above -- please interpret and summarize key findings. Do NOT contradict the DATA or STATUS fields.]' });
+      emit({ type: 'stream_end' });
+      return turn(messages, emit, opts);
+    }
+    emit({ type: 'token', content: report });
+    emit({ type: 'stream_end' });
+    messages.push({ role: 'assistant', content: report });
+    emit({ type: 'done' });
+    return;
+  }
+
+  if (hasLLM) {
+    // Unknown intent but LLM available -- let it handle
+    return turn(messages, emit, opts);
+  }
+
+  // No LLM, no known intent -- show capability list
+  const { listWorkflows } = await import('./control_engine.mjs');
+  const wfList = listWorkflows().map(w => '  ' + w.name).join('\n');
+  emit({ type: 'status', text: 'done' });
+  emit({ type: 'stream_start' });
+  const msg = [
+    '[Control Engine -- no AI model available]',
+    '',
+    'I cannot interpret this request without AI reasoning.',
+    'Available direct diagnostics (just describe what you need):',
+    wfList,
+    '',
+    'To enable AI reasoning: run runtime/get-offline.sh  (~2.2 GB download)',
+    'Or add OPENAI_API_KEY / ANTHROPIC_API_KEY to config/.env',
+  ].join('\n');
+  emit({ type: 'token', content: msg });
+  emit({ type: 'stream_end' });
+  messages.push({ role: 'assistant', content: msg });
+  emit({ type: 'done' });
 }

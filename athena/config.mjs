@@ -45,8 +45,15 @@ export const CURATED_MODELS = [
 
 export const MEM_CHAR_LIMIT = 8000;
 
-// Warn at startup if no provider has a key configured
-const _hasKey = API_KEY || ANTHROPIC_KEY;
-if (!_hasKey) {
-  console.warn('\n[athena] WARNING: No API key found. Set OPENAI_API_KEY or ANTHROPIC_API_KEY in config/.env\n');
+// Exported so athena.mjs can decide how to handle missing keys
+export const _hasKey = API_KEY || ANTHROPIC_KEY;
+
+export const LOCAL_LLM_PORT = Number(CFG.LOCAL_LLM_PORT) || 17860;
+
+export function isOfflineMode() { return !API_KEY && !ANTHROPIC_KEY; }
+
+export function registerLocalModel(modelId) {
+  const existing = CURATED_MODELS.findIndex(g => g.label === 'Local');
+  if (existing >= 0) CURATED_MODELS.splice(existing, 1);
+  CURATED_MODELS.unshift({ label: 'Local', models: [modelId] });
 }
