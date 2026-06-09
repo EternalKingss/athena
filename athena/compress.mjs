@@ -84,18 +84,18 @@ function compressValue(val, depth) {
   if (val === null || typeof val === 'boolean' || typeof val === 'number') return val;
 
   if (typeof val === 'string') {
-    return val.length > 80 ? val.slice(0, 80) + '…' : val;
+    return val.length > 140 ? val.slice(0, 140) + '…' : val;
   }
 
   if (Array.isArray(val)) {
-    const kept = val.slice(0, 3).map(v => compressValue(v, depth + 1));
-    if (val.length > 3) kept.push(`(…${val.length - 3} more)`);
+    const kept = val.slice(0, 8).map(v => compressValue(v, depth + 1));
+    if (val.length > 8) kept.push(`(…${val.length - 8} more)`);
     return kept;
   }
 
   if (typeof val === 'object') {
     // Beyond depth 4 just show key names without values
-    if (depth > 4) return '(…)';
+    if (depth > 5) return '(…)';
     const out = {};
     for (const [k, v] of Object.entries(val))
       out[k] = compressValue(v, depth + 1);

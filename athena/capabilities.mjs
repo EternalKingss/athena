@@ -20,6 +20,13 @@ async function probe(cmd) {
   }
 }
 
+// Encode a PowerShell script for -EncodedCommand (avoids quote hell and WMIC deprecation warnings).
+function psCmd(script) {
+  const buf = Buffer.allocUnsafe(script.length * 2);
+  for (let i = 0; i < script.length; i++) buf.writeUInt16LE(script.charCodeAt(i), i * 2);
+  return 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ' + buf.toString('base64');
+}
+
 // One subprocess per group — far fewer disk seeks than one-per-binary.
 async function checkAll(names) {
   if (!names.length) return [];
@@ -50,7 +57,7 @@ async function detectGPUs() {
   }
 
   if (!gpus.length && isWin) {
-    const wmicOut = await probe('wmic path win32_VideoController get Name /format:list 2>nul');
+    const wmicOut = await probe(psCmd('Get-CimInstance Win32_VideoController | ForEach-Object { Write-Output ("Name=" + $_.Name) }'));
     if (wmicOut) {
       wmicOut.split('\n')
         .filter(l => l.includes('='))
@@ -108,26 +115,26 @@ async function detectSystemResources() {
   let ramTotal = null, ramFree = null, cpuModel = null, cpuCores = null, disks = [];
 
   if (isWin) {
-    const ramOut = await probe('wmic OS get TotalVisibleMemorySize,FreePhysicalMemory /format:list 2>nul');
+    const ramOut = await probe(psCmd('$o=Get-CimInstance Win32_OperatingSystem; Write-Output ("TotalVisibleMemorySize=" + $o.TotalVisibleMemorySize); Write-Output ("FreePhysicalMemory=" + $o.FreePhysicalMemory)'));
     if (ramOut) {
       const total = ramOut.match(/TotalVisibleMemorySize=(\d+)/)?.[1];
       const free  = ramOut.match(/FreePhysicalMemory=(\d+)/)?.[1];
       if (total) ramTotal = Math.round(Number(total) / 1024 / 1024 * 10) / 10 + ' GB';
       if (free)  ramFree  = Math.round(Number(free)  / 1024 / 1024 * 10) / 10 + ' GB free';
     }
-    const cpuOut = await probe('wmic cpu get Name,NumberOfCores /format:list 2>nul');
+    const cpuOut = await probe(psCmd('$c=Get-CimInstance Win32_Processor; Write-Output ("Name=" + $c.Name); Write-Output ("NumberOfCores=" + $c.NumberOfCores)'));
     if (cpuOut) {
       cpuModel = cpuOut.match(/Name=(.+)/)?.[1]?.trim();
       cpuCores = cpuOut.match(/NumberOfCores=(\d+)/)?.[1];
     }
-    const diskOut = await probe('wmic logicaldisk where drivetype=3 get Caption,Size,FreeSpace /format:list 2>nul');
+    const diskOut = await probe(psCmd('Get-CimInstance Win32_LogicalDisk -Filter DriveType=3 | ForEach-Object { Write-Output ("Caption=" + $_.Caption); Write-Output ("Size=" + $_.Size); Write-Output ("FreeSpace=" + $_.FreeSpace); Write-Output "" }'));
     if (diskOut) {
-      const entries = diskOut.split(/\n\n/).filter(Boolean);
+      const entries = diskOut.replace(/\r/g, '').split('\n\n').filter(Boolean);
       for (const e of entries) {
         const cap  = e.match(/Caption=(\S+)/)?.[1];
         const size = e.match(/Size=(\d+)/)?.[1];
         const free = e.match(/FreeSpace=(\d+)/)?.[1];
-        if (cap && size) disks.push(`${cap} ${Math.round(Number(size)/1e9)}GB (${Math.round(Number(free||0)/1e9)}GB free)`);
+        if (cap && size) disks.push(cap + ' ' + Math.round(Number(size)/1e9) + 'GB (' + Math.round(Number(free||0)/1e9) + 'GB free)');
       }
     }
   } else if (isMac) {

@@ -22,10 +22,7 @@ export const BASE             = CFG.OPENAI_BASE_URL   || 'https://api.openai.com
 export const AUTO             = (CFG.AUTO_APPROVE     || 'false').toLowerCase() === 'true';
 export const NAME             = CFG.AGENT_NAME        || 'Athena';
 export const BRAVE_KEY        = CFG.BRAVE_API_KEY     || process.env.BRAVE_API_KEY     || '';
-export const NVIDIA_KEY       = CFG.NVIDIA_API_KEY    || process.env.NVIDIA_API_KEY    || '';
 export const ANTHROPIC_KEY    = CFG.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY || '';
-export const VOYAGE_KEY       = CFG.VOYAGE_API_KEY    || process.env.VOYAGE_API_KEY    || '';
-export const NVIDIA_BASE      = 'https://integrate.api.nvidia.com/v1';
 export const ANTHROPIC_BASE   = 'https://api.anthropic.com/v1';
 export const ANTHROPIC_VERSION = '2023-06-01';
 
@@ -44,19 +41,12 @@ export const CURATED_MODELS = [
     'claude-sonnet-4-6',
     'claude-haiku-4-5-20251001',
   ]},
-  { label: 'NVIDIA', models: [
-    'nvidia/nemotron-3-super-120b-a12b',
-    'deepseek-ai/deepseek-v4-pro',
-    'meta/llama-3.3-70b-instruct',
-    'qwen/qwen3-235b-a22b',
-    'nvidia/llama-3.1-nemotron-ultra-253b-v1',
-  ]},
 ];
 
-export const MEM_CHAR_LIMIT = 2200;
+export const MEM_CHAR_LIMIT = 8000;
 
 // Warn at startup if no provider has a key configured
-const _hasKey = API_KEY || ANTHROPIC_KEY || NVIDIA_KEY;
+const _hasKey = API_KEY || ANTHROPIC_KEY;
 if (!_hasKey) {
-  console.warn('\n[athena] WARNING: No API key found. Set OPENAI_API_KEY, ANTHROPIC_API_KEY, or NVIDIA_API_KEY in config/.env\n');
+  console.warn('\n[athena] WARNING: No API key found. Set OPENAI_API_KEY or ANTHROPIC_API_KEY in config/.env\n');
 }

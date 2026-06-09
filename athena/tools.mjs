@@ -6,8 +6,8 @@ import { exec, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { BRAVE_KEY, AUTO } from './config.mjs';
 import { PATHS } from './paths.mjs';
-import { handleMemoryTool } from './memory.mjs';
-import { loadSkill, saveSkill, updateSkill } from './skills.mjs';
+import { handleMemoryTool, logProhibitedPattern } from './memory.mjs';
+import { loadSkill, saveSkill, updateSkill, getSkillStatus } from './skills.mjs';
 import { handleRecallTool } from './embed.mjs';
 import { getCachedCapabilities, detectCapabilities, clearCapabilityCache } from './capabilities.mjs';
 import { logAuditEvent } from './audit.mjs';
@@ -41,14 +41,14 @@ function stripHtml(html) {
 }
 
 export const TOOLS = [
-  { type: 'function', function: { name: 'run_shell', description: 'Execute a shell command on the host machine. Returns stdout + stderr.', parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] } } },
+  { type: 'function', function: { name: 'run_shell', description: 'Execute a shell command on the host machine. On Windows, wrap scripts with powershell prefix. Returns stdout + stderr.', parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] } } },
   { type: 'function', function: { name: 'read_file', description: 'Read a file from disk.', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } } },
   { type: 'function', function: { name: 'write_file', description: 'Write content to a file (creates or overwrites).', parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] } } },
-  { type: 'function', function: { name: 'edit_file', description: 'Replace an exact string in a file.', parameters: { type: 'object', properties: { path: { type: 'string' }, old_str: { type: 'string' }, new_str: { type: 'string' } }, required: ['path', 'old_str', 'new_str'] } } },
+  { type: 'function', function: { name: 'edit_file', description: 'Replace an exact string in a file. Always call read_file first to get the exact text to replace.', parameters: { type: 'object', properties: { path: { type: 'string' }, old_str: { type: 'string' }, new_str: { type: 'string' } }, required: ['path', 'old_str', 'new_str'] } } },
   { type: 'function', function: { name: 'list_dir', description: 'List files and folders in a directory.', parameters: { type: 'object', properties: { path: { type: 'string' } } } } },
   { type: 'function', function: { name: 'fetch_url', description: 'Fetch a URL and return readable text. Strips HTML.', parameters: { type: 'object', properties: { url: { type: 'string' }, raw: { type: 'boolean' } }, required: ['url'] } } },
   { type: 'function', function: { name: 'web_search', description: 'Search the web via Brave Search.', parameters: { type: 'object', properties: { query: { type: 'string' }, count: { type: 'number' } }, required: ['query'] } } },
-  { type: 'function', function: { name: 'memory', description: 'Manage long-term memory across sessions.', parameters: { type: 'object', properties: { action: { type: 'string', enum: ['read','add','replace','remove','search'] }, target: { type: 'string', enum: ['athena','user'] }, content: { type: 'string' }, old: { type: 'string' }, query: { type: 'string' } }, required: ['action','target'] } } },
+  { type: 'function', function: { name: 'memory', description: 'Manage long-term memory across sessions.', parameters: { type: 'object', properties: { action: { type: 'string', enum: ['read','add','replace','remove','search'] }, target: { type: 'string', enum: ['athena','user','instincts'] }, content: { type: 'string' }, old: { type: 'string' }, query: { type: 'string' } }, required: ['action','target'] } } },
   { type: 'function', function: { name: 'clipboard_read', description: 'Read current clipboard text.', parameters: { type: 'object', properties: {} } } },
   { type: 'function', function: { name: 'clipboard_write', description: 'Write text to the clipboard.', parameters: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] } } },
   { type: 'function', function: { name: 'notify', description: 'Send a desktop notification.', parameters: { type: 'object', properties: { title: { type: 'string' }, message: { type: 'string' } }, required: ['title','message'] } } },
@@ -68,6 +68,7 @@ export const TOOLS = [
   { type: 'function', function: { name: 'network_scan', description: 'Show network situational awareness: interfaces, DNS servers, listening ports, routing table. Pass deep:true and target IP to run an nmap scan if available.', parameters: { type: 'object', properties: { target: { type: 'string', description: 'Target IP for nmap scan (default: 127.0.0.1)' }, deep: { type: 'boolean' } } } } },
   { type: 'function', function: { name: 'generate_report', description: 'Generate a professional Markdown report. type: system (hardware+software inventory), security (threats+triage), network (interfaces+ports), full (all combined).', parameters: { type: 'object', properties: { type: { type: 'string', enum: ['system', 'security', 'network', 'full'] } }, required: ['type'] } } },
   { type: 'function', function: { name: 'audit_replay', description: 'Replay the audit trail for a given date. Shows all tool calls and session events with timestamps.', parameters: { type: 'object', properties: { date: { type: 'string', description: 'YYYY-MM-DD format (default: today)' } } } } },
+  { type: 'function', function: { name: 'machine_health_trend', description: 'Show longitudinal health trend for this machine: visit history, capability changes over time, usage frequency, and any detected deterioration patterns.', parameters: { type: 'object', properties: {} } } },
   { type: 'function', function: { name: 'machine_diff', description: 'Compare the current machine state against the last saved fingerprint. Shows what tools, languages, or hardware changed since the last visit.', parameters: { type: 'object', properties: {} } } },
   { type: 'function', function: { name: 'remediate', description: 'Get a guided remediation plan for a security or system issue. Returns exact commands to fix the problem. Set execute:true to apply the fix (requires approval).', parameters: { type: 'object', properties: { issue: { type: 'string', description: 'The issue to fix, e.g. "firewall not enabled", "ssh root login allowed", "pending updates"' }, execute: { type: 'boolean' } }, required: ['issue'] } } },
 ];
@@ -94,7 +95,7 @@ export async function runTool(name, args, preApproved, sessionTodos, setSessionT
     try {
       return await runCmd(args.command);
     } catch (e) {
-      // Auto-retry with sudo on permission errors (Linux/Mac only — Windows uses UAC not sudo)
+      // Auto-retry with sudo on permission errors (Linux/Mac only -- Windows uses UAC not sudo)
       if (isPermErr(e.message) && process.platform !== 'win32' && !args.command.trimStart().startsWith('sudo ')) {
         try {
           return await runCmd('sudo ' + args.command);
@@ -129,7 +130,7 @@ export async function runTool(name, args, preApproved, sessionTodos, setSessionT
     const original = await readFile(target, 'utf8');
     const count = original.split(args.old_str).length - 1;
     if (count === 0) return 'edit_file: old_str not found in ' + target;
-    if (count > 1)   return 'edit_file: old_str appears ' + count + ' times — make it more unique';
+    if (count > 1)   return 'edit_file: old_str appears ' + count + ' times -- make it more unique';
     await writeFile(target, original.replace(args.old_str, () => args.new_str));
     return 'Edited ' + target;
   }
@@ -165,7 +166,7 @@ export async function runTool(name, args, preApproved, sessionTodos, setSessionT
       const b64 = Buffer.from(String(args.text)).toString('base64');
       return runPS(`[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('${b64}')) | Set-Clipboard`);
     }
-    // Mac uses pbcopy, Linux uses xclip then xsel as fallback — await the process so write is complete before returning
+    // Mac uses pbcopy, Linux uses xclip then xsel as fallback -- await the process so write is complete before returning
     const tryWrite = cmd => new Promise((resolve, reject) => {
       const proc = spawn(cmd, [], { shell: true });
       proc.stdin.write(String(args.text));
@@ -220,7 +221,18 @@ export async function runTool(name, args, preApproved, sessionTodos, setSessionT
 
   if (name === 'recall') return await handleRecallTool(args);
 
-  if (name === 'load_skill')   return loadSkill(args.name);
+  if (name === 'load_skill') {
+    const status = getSkillStatus(args.name);
+    const skillContent = loadSkill(args.name);
+    if (status === 'unverified') {
+      // Reaching here means the Tier 2 approval gate was passed -- promote to verified.
+      const existingDesc = (skillContent.match(/^description:\s*(.+)$/m) || [])[1] || '';
+      const body = skillContent.replace(/^---[\s\S]*?---\n+/, '');
+      updateSkill(args.name, existingDesc, body, 'verified').catch(() => {});
+      return '[NOW VERIFIED: ' + args.name + ' -- approved by user, promoted from unverified]\n\n' + skillContent;
+    }
+    return skillContent;
+  }
   if (name === 'save_skill')   return await saveSkill(args.name, args.description, args.content);
   if (name === 'update_skill') return await updateSkill(args.name, args.description, args.content);
 
@@ -267,6 +279,12 @@ export async function runTool(name, args, preApproved, sessionTodos, setSessionT
     return result.report;
   }
 
+  if (name === 'machine_health_trend') {
+    const { machineTrend } = await import('./machines.mjs');
+    const trend = machineTrend();
+    return trend.error || trend.summary;
+  }
+
   if (name === 'remediate') {
     const plan = getRemediationPlan(args.issue);
     if (!plan.found) return plan.message;
@@ -284,7 +302,7 @@ export async function runTool(name, args, preApproved, sessionTodos, setSessionT
         '',
         'Call remediate with execute:true to apply (requires approval).',
       ];
-      if (!plan.steps.length) lines.splice(5, 0, '  (no automated steps — see explanation)');
+      if (!plan.steps.length) lines.splice(5, 0, '  (no automated steps -- see explanation)');
       return lines.join('\n');
     }
     if (!ok) throw new Error('not approved');
@@ -332,6 +350,63 @@ export async function runTool(name, args, preApproved, sessionTodos, setSessionT
   }
 
   return 'Unknown tool: ' + name;
+}
+
+export function classifyRisk(name, args, machineProfile) {
+  const safe = new Set([
+    'read_file', 'list_dir', 'fetch_url', 'web_search', 'memory', 'recall',
+    'clarify', 'todo', 'notify', 'open', 'clipboard_read',
+    'machine_info', 'boot_triage', 'threat_assess', 'network_scan',
+    'generate_report', 'audit_replay', 'machine_diff', 'machine_health_trend',
+    'workspace_read', 'spawn_agent', 'save_skill', 'update_skill',
+    'query_machine_logs', 'diff_machine_state',
+  ]);
+  if (safe.has(name)) return { tier: 0, reason: 'read-only or informational' };
+
+  // load_skill: verified skills are Tier 0; unverified (auto-crystallized) are Tier 1
+  // so chain-loading an unverified skill from inside a verified one gets logged
+  if (name === 'load_skill') {
+    const status = getSkillStatus(args && args.name);
+    if (status === 'unverified') return { tier: 2, reason: 'loading unverified crystallized skill -- approve to verify' };
+    return { tier: 0, reason: 'loading verified skill' };
+  }
+
+  if (name === 'remediate' && args && args.execute === true)
+    return { tier: 2, reason: 'remediation with execute:true applies system changes' };
+
+  if (name === 'remediate')
+    return { tier: 1, reason: 'remediation plan lookup -- no execution' };
+
+  if (name === 'run_shell') {
+    const cmd = (args && args.command || '').toLowerCase();
+    if (/\b(rm\s+-rf|rmdir\s+\/s|del\s+\/[sqf]|format\s+[a-z]:|(^|\s)dd\s|mkfs|fdisk|reg\s+(delete|add)|sc\s+(delete|stop|start)|shutdown|reboot)\b/.test(cmd))
+      return { tier: 2, reason: 'shell command matches destructive pattern' };
+    if (/\b(pip\s+install|npm\s+install|apt(-get)?\s+install|winget\s+install|choco\s+install|curl.+-o|wget.+-O|mv |move |copy |cp |xcopy|set-content|out-file|new-item)\b/.test(cmd))
+      return { tier: 1, reason: 'shell command installs or writes files' };
+    return { tier: 1, reason: 'shell command with unknown side effects' };
+  }
+
+  if (name === 'write_file') {
+    const path = (args && args.path || '').replace(/\\/g, '/').toLowerCase();
+    if (/^\/(etc|usr|bin|sbin|boot|sys|proc)|^[a-z]:\/windows/i.test(path))
+      return { tier: 2, reason: 'write to system path' };
+    return { tier: 1, reason: 'file write -- recoverable' };
+  }
+
+  if (name === 'edit_file') {
+    const path = (args && args.path || '').replace(/\\/g, '/').toLowerCase();
+    if (/^\/(etc|usr|bin|sbin|boot)|^[a-z]:\/windows/i.test(path))
+      return { tier: 2, reason: 'edit of system file' };
+    return { tier: 1, reason: 'file edit -- recoverable' };
+  }
+
+  if (name === 'clipboard_write')
+    return { tier: 1, reason: 'overwrites clipboard contents' };
+
+  if (name === 'workspace_write')
+    return { tier: 0, reason: 'in-memory agent workspace' };
+
+  return { tier: 1, reason: 'unclassified tool -- treating as low-impact' };
 }
 
 export const DESTRUCTIVE = new Set(['run_shell', 'write_file', 'edit_file', 'remediate']);

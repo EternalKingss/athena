@@ -102,7 +102,17 @@ export function extractTags(text) {
   if (/boot|grub|bcd|mbr|uefi|bios|recovery/i.test(lower))             tags.push('boot');
   if (/error|fix|debug|crash|fail|broken|issue/i.test(lower))          tags.push('debugging');
   if (/install|setup|config|configure/i.test(lower))                    tags.push('setup');
-  if (/athena|skill|memory|agent/i.test(lower))                         tags.push('athena');
+  if (/athena|skill|memory|agent|workspace/i.test(lower))               tags.push('athena');
+  if (/security|malware|virus|ransomware|exploit|cve|vulnerability|nmap/i.test(lower))  tags.push('security');
+  if (/driver|device|hardware|usb|bluetooth|gpu|ram|motherboard|peripheral/i.test(lower))  tags.push('hardware');
+  if (/registry|regedit|group policy|gpo|event log|task scheduler|wmic/i.test(lower))  tags.push('windows-admin');
+  if (/rust|cargo|\.rs/i.test(lower))   tags.push('rust');
+  if (/golang?|\.go$/i.test(lower))     tags.push('go');
+  if (/java|maven|gradle|\.java|\.jar/i.test(lower))  tags.push('java');
+  if (/api|rest|http|endpoint|webhook|graphql/i.test(lower))  tags.push('api');
+  if (/performance|slow|memory leak|latency|throughput|benchmark/i.test(lower))  tags.push('performance');
+  if (/vpn|firewall|proxy|nat|router|port forward/i.test(lower))  tags.push('network');
+  if (/winget|chocolatey|scoop|package manager/i.test(lower))     tags.push('windows');
 
   return [...new Set(tags)]; // dedupe
 }
@@ -115,9 +125,9 @@ export async function handleRecallTool(args) {
 
   if (!query) return 'query is required.';
 
-  const { API_KEY, VOYAGE_KEY, NVIDIA_KEY } = await import('./config.mjs');
-  if (!API_KEY && !VOYAGE_KEY && !NVIDIA_KEY)
-    return 'Recall requires an embedding key. Add VOYAGE_API_KEY, OPENAI_API_KEY, or NVIDIA_API_KEY to config/.env.';
+  const { API_KEY } = await import('./config.mjs');
+  if (!API_KEY)
+    return 'Recall requires OPENAI_API_KEY in config/.env.';
 
   const results = await searchSimilar(query, topK, type);
   if (!results.length) return 'No relevant memories found.';

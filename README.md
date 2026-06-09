@@ -1,8 +1,8 @@
-# Athena — Portable AI Agent
+# Athena -- Portable AI Agent
 
-A personal AI agent that lives on this drive and runs on whatever machine you plug into. She can run shell commands, read/write files, search the web, remember things across sessions, spawn sub-agents for parallel work, and build her own skill library over time. Her memory lives on the drive and travels with you.
+A personal AI agent that lives on a USB drive and runs on whatever machine you plug into. She can run shell commands, read/write files, search the web, remember things across sessions, spawn sub-agents for parallel work, build her own skill library, and proactively watch the machine she is running on.
 
-Nothing is installed on the host. Nothing is left behind. Zero npm dependencies — only Node built-ins.
+Nothing is installed on the host. Nothing is left behind. Zero npm dependencies -- only Node built-ins.
 
 ## Providers
 
@@ -12,19 +12,18 @@ Switch between providers from the UI dropdown at any time, no restart needed:
 |----------|--------|-----------|
 | **OpenAI** | gpt-5.5, gpt-5.4-mini, gpt-4o, gpt-4o-mini | `OPENAI_API_KEY` |
 | **Anthropic** | claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5-20251001 | `ANTHROPIC_API_KEY` |
-| **NVIDIA NIM** | Nemotron-Super-120B, DeepSeek-V4-Pro, Llama-3.3-70B, Qwen3-235B, Nemotron-Ultra-253B | `NVIDIA_API_KEY` |
 
-You only need keys for the providers you use. OpenAI is also required for semantic memory (embeddings) regardless of which model you chat with.
+OpenAI is also required for semantic memory (embeddings) regardless of which model you chat with. If OpenAI goes down, Athena automatically fails over to Anthropic (and back again after 15 minutes).
 
 ## Setup (do this once)
 
 ### 1. Configure your keys
 ```
-config/.env.example  →  copy to  config/.env
+config/.env.example  ->  copy to  config/.env
 ```
 Fill in at least one provider key. See `.env.example` for all options.
 
-### 2. Add portable runtimes (one per OS you'll use)
+### 2. Add portable runtimes (one per OS you will use)
 Download Node 22 LTS from https://nodejs.org/dist/ and place it so the launcher finds it:
 
 | OS | Download | Path |
@@ -36,152 +35,193 @@ Download Node 22 LTS from https://nodejs.org/dist/ and place it so the launcher 
 | Linux x64 | `node-vXX-linux-x64.tar.xz` | `runtime/linux-x64/bin/node` |
 | Linux ARM | `node-vXX-linux-arm64.tar.xz` | `runtime/linux-arm64/bin/node` |
 
-Windows users: `runtime/get-node.ps1` can download and extract it automatically.
+Windows users: `runtime/get-node.ps1` downloads and extracts automatically.
 
 #### Optional: Portable Python (no host install)
-Athena can carry her own Python using [python-build-standalone](https://github.com/indygreg/python-build-standalone). Nothing touches the host.
-
 ```bash
-# Linux / macOS
-bash runtime/get-python.sh
-
-# Windows
-powershell -ExecutionPolicy Bypass -File runtime\get-python.ps1
+bash runtime/get-python.sh        # Linux / macOS
+powershell -ExecutionPolicy Bypass -File runtime\get-python.ps1   # Windows
 ```
-
-Drops into `runtime/<arch>/python/`. Any `python` or `pip` command Athena runs automatically uses the drive's Python first.
+Drops into `runtime/<arch>/python/`. Any `python` or `pip` command Athena runs uses the drive's Python first.
 
 #### Optional: Loki malware scanner (no host install)
-Installs [Loki](https://github.com/Neo23x0/Loki) (YARA + IOC scanner) into the drive's Python. Requires portable Python above.
-
 ```bash
-# Linux / macOS
-bash runtime/get-loki.sh
-
-# Windows
-powershell -ExecutionPolicy Bypass -File runtime\get-loki.ps1
+bash runtime/get-loki.sh          # Linux / macOS
+powershell -ExecutionPolicy Bypass -File runtime\get-loki.ps1     # Windows
 ```
-
-Clones Loki into `tools/loki/`, dependencies install into the drive's Python. Ask Athena to `load_skill loki-scan` for usage.
-
-You only need the platforms you plug into.
+Clones Loki into `tools/loki/`, installs dependencies into drive Python. Ask Athena to `load_skill loki-scan` for usage.
 
 ## Running
 
 - **Windows:** double-click `Athena.bat`
-- **macOS:** double-click `Athena.command` *(first time: right-click → Open to clear Gatekeeper)*
+- **macOS:** double-click `Athena.command` *(first time: right-click -> Open to clear Gatekeeper)*
 - **Linux:** `./start.sh`
 
-Athena opens in your browser. Type to talk. Use the dropdown to switch models.
+Athena opens in your browser. Use the dropdown to switch models.
 
-**UI commands:** `/task <goal>` · `/spawn <name> <goal>` · `/mem` · `/forget` · `/model <name>` · `/exit`
+**Commands:** `/task <goal>` -- `/spawn <name> <goal>` -- `/mem` -- `/forget` -- `/model <name>` -- `/exit`
+
+---
 
 ## What she can do
 
 ### Tools
-| Tool | What it does |
-|------|-------------|
-| `run_shell` | Execute shell commands on the host |
-| `read_file` / `write_file` / `edit_file` | File operations |
-| `list_dir` | Browse the filesystem |
-| `fetch_url` | Fetch and read any URL (strips HTML) |
-| `web_search` | Brave Search — live web results |
-| `memory` | Read/write long-term memory (persists across sessions) |
-| `recall` | Semantic search over all past memory and sessions |
-| `clipboard_read` / `clipboard_write` | Host clipboard |
-| `notify` | Desktop notification |
-| `open` | Open files, folders, or URLs |
-| `clarify` | Ask a focused question before acting |
-| `todo` | Track multi-step task progress |
-| `spawn_agent` | Launch a parallel background agent |
-| `workspace_read` / `workspace_write` | Share data between agents |
-| `load_skill` / `save_skill` / `update_skill` | Skill library management |
-| `machine_info` | Query detected machine capabilities. Pass `rescan:true` to re-probe. |
+
+| Tool | Tier | What it does |
+|------|------|-------------|
+| `run_shell` | 1/2 | Execute shell commands on the host |
+| `read_file` / `write_file` / `edit_file` | 0/1/2 | File operations |
+| `list_dir` | 0 | Browse the filesystem |
+| `fetch_url` | 0 | Fetch and read any URL (strips HTML) |
+| `web_search` | 0 | Brave Search -- live web results |
+| `memory` | 0 | Read/write long-term memory |
+| `recall` | 0 | Semantic search over all past sessions |
+| `clipboard_read` / `clipboard_write` | 0/1 | Host clipboard |
+| `notify` | 0 | Desktop notification |
+| `open` | 0 | Open files, folders, or URLs |
+| `clarify` | 0 | Ask a focused question before acting |
+| `todo` | 0 | Track multi-step task progress |
+| `spawn_agent` | 0 | Launch a parallel background agent |
+| `workspace_read` / `workspace_write` | 0 | Share data between agents |
+| `load_skill` / `save_skill` / `update_skill` | 0/2* | Skill library management |
+| `machine_info` | 0 | Query detected machine capabilities |
+| `boot_triage` | 0 | Firewall, AV, disk, SSH, updates health check |
+| `threat_assess` | 0 | Risk score, open ports, SUID, missing controls |
+| `network_scan` | 0 | Interfaces, DNS, listening ports, routing table |
+| `machine_health_trend` | 0 | Longitudinal visit history and capability drift |
+| `machine_diff` | 0 | Diff current state vs last saved fingerprint |
+| `query_machine_logs` | 0 | Filtered OS event log query (severity, time range, pattern) |
+| `diff_machine_state` | 0 | Runtime state diff -- new processes, ports, drivers vs baseline |
+| `generate_report` | 0 | Full system / security / network report |
+| `remediate` | 1/2 | Guided fix for a security or system issue |
+| `audit_replay` | 0 | Replay the full tool audit trail for a given day |
+
+*`load_skill` is Tier 2 for unverified (auto-crystallized) skills. User approval promotes them to verified.
+
+**Tiers:** 0 = auto-run, no log. 1 = auto-run, logged as `action_taken`. 2 = blocks for explicit user approval.
 
 ### Memory
-Two tiers:
 
-- **Long-term memory** (`data/memory/athena.md`, `user.md`) — facts that survive across sessions. Loaded into every conversation. Bounded to 2,200 chars to stay concise.
-- **Semantic recall** — every memory entry and session summary is embedded (OpenAI `text-embedding-3-small`) and stored in `embeddings.jsonl`. `recall` finds relevant past context by meaning, not just keywords.
+Three layers:
 
-### Context management
-- **Auto-compression** kicks in at 40 messages — the middle of the conversation is summarized into bullets, keeping the first 4 messages (system context) and last 10 (recent context). Your active task list is reinjected so nothing is lost.
-- **Tool output compression** — large tool results are automatically compressed before they enter the context window. JSON keeps its full schema but truncates long values; logs deduplicate repeated lines; code has comments stripped; all types get a head+tail treatment if still large. Triggers at 1,500 chars, hard cap at 8,000. The UI always shows you the full raw output — only the LLM gets the compressed version.
-- **50 tool-call cap** per turn prevents runaway loops.
+- **Long-term memory** (`data/memory/athena.md`, `user.md`, `instincts.md`) -- loaded into every system prompt. `instincts.md` holds learned behavioral patterns auto-promoted from session analysis.
+- **Negative knowledge** (`data/memory/prohibited_patterns.md`) -- dead ends Athena has hit on this machine. Injected into system prompt so she never wastes tokens retrying known broken approaches.
+- **Semantic recall** -- every memory entry and session summary is embedded and stored in `embeddings.jsonl`. `recall` finds relevant past context by meaning, not keywords.
 
-### Machine capabilities
-When Athena boots, she runs a background scan of the host machine and injects the results into her system prompt. She detects:
+### Instinct promotion
 
-- **Languages** — Python, Ruby, PHP, Perl, Lua, Julia, R, Swift, Kotlin, Scala, Elixir, Haskell, Zig
-- **Compilers / Build** — gcc, clang, javac, rustc, Go, .NET, tsc, Maven, Gradle, CMake, Make, Ninja, Bazel
-- **Package managers** — npm, pnpm, yarn, bun, deno, pip, uv, poetry, gem, composer, brew, apt, yum, dnf, pacman, nix, winget, choco, scoop
-- **Containers** — Docker, docker-compose, Podman, kubectl, Helm, minikube, kind
-- **Browsers** — Chrome, Chromium, Firefox, Brave, Edge, Opera, Safari, lynx
-- **IDEs / Editors** — VS Code, Cursor, Zed, vim, nvim, emacs, IntelliJ, PyCharm, Helix, Sublime
-- **Databases** — MySQL, PostgreSQL, SQLite, Redis, MongoDB, InfluxDB, DuckDB
-- **DevOps / Cloud** — git, gh, aws, az, gcloud, terraform, ansible, pulumi, vault, fly, vercel, wrangler
-- **Utilities** — curl, wget, jq, ffmpeg, tmux, fzf, ripgrep, bat, rsync, openssl, gpg, sops, age
-- **GPUs** — NVIDIA (nvidia-smi), AMD (rocm-smi), macOS (system_profiler), Linux (lspci), Windows (wmic)
-- **MCP servers** — scans Claude Desktop, Cursor, and project-level `.mcp.json` configs
+After every session, Athena scans the last 60 session files and scores tool usage by confidence (0-100) based on frequency and spread across sessions. Patterns with conf >= 85 seen in 3+ sessions are auto-promoted to `instincts.md` and applied in future turns without being asked.
 
-The scan is non-blocking — Athena is ready immediately and the machine block appears in the system prompt as soon as the scan resolves (before the first response). Call `machine_info` to see the full result, or pass `rescan:true` to re-probe after installing something new.
+### Auto-crystallization
 
-### Skills
-Athena builds her own playbook. When she solves something non-trivial, she saves it as a skill in `skills/`. Skills are plain markdown with YAML frontmatter — hand-editable, version-controlled, loaded on demand.
+After any `/task` that uses 4+ tool calls, Athena fires a cheap-model post-task hook that analyzes the tool trace and asks: is this a repeatable pattern? If yes, it saves or updates a skill automatically. Crystallized skills are marked `status: unverified` and require user approval (Tier 2) before first use -- approval promotes them to verified permanently.
 
-Current built-in skills: `system-health`, `git-workflow`, `dev-setup`, `remove-mcafee-windows`, `windows-pip-overlay-control`, `windows-safe-speed-cleanup`.
+### Proactive watcher
 
-### Multi-agent
-`spawn_agent` launches a background agent with its own isolated message history and task list. Agents communicate via a shared in-memory workspace (`workspace_write` / `workspace_read`). Final results are automatically posted to the workspace so the main agent can read them without being asked. The UI shows each agent in its own tab with a live status indicator and a toast notification when it finishes.
+`watcher.mjs` runs in the background and watches four conditions:
+
+| Condition | Interval | Fires when |
+|-----------|----------|-----------|
+| `disk_low` | 5 min | < 5 GB free (critical) or < 15 GB (low) or > 2 GB drop since last check |
+| `kp41` | 10 min | New Windows Kernel-Power Event 41 (unexpected shutdown) |
+| `temp_high` | 3 min | CPU >= 80 C (high) or >= 90 C (critical) -- Linux only |
+| `net_change` | 2 min | Active network interfaces added or removed |
+
+If Athena is mid-turn when an alert fires, it queues in `_pendingAlerts` and drains at the next safe turn boundary. Critical alerts (`temp_high`, `kp41`) also checkpoint the current task state to `data/memory/task_state.json`.
+
+### Multi-agent (CORAL)
+
+`spawn_agent` launches background agents with isolated message histories. Agents share data via a workspace and communicate skills via the **CORAL versioned log** -- an append-only broadcast channel. Skills are pulled at turn boundaries (never mid-execution) using a monotonic version counter so each agent only receives entries it hasn't seen. Cross-platform filtering ensures Windows-crystallized skills are not broadcast to Linux agents.
+
+### Longitudinal machine records
+
+Every boot creates or updates a machine fingerprint at `data/memory/machines/<id>.json`. The record tracks UUID, first seen date, visit count, hostname history, and a capped 50-entry history of capability snapshots. `machineTrend()` computes visits/day, span, unique tools seen, and recent changes. `machine_health_trend` exposes this in conversation.
+
+### Runtime state diffing
+
+`diff_machine_state` captures a live snapshot (running processes, listening ports, loaded drivers, TCP connection count) and diffs it against a saved baseline. The first call saves the baseline; subsequent calls report new/gone processes, opened/closed ports, loaded/removed drivers, and connection count delta. Turns "my network is suddenly slow" into a concrete delta report.
+
+### API failover
+
+Per-provider failure tracking with a 2-strike threshold. On two consecutive 429/401/403 errors, the failing provider is blocked for 15 minutes and Athena switches to the next available one automatically. `getProviderStatus()` shows current failure counts and reset times.
+
+---
 
 ## What lives where
 
 ```
-config/.env              — your keys and settings (stays on drive, never committed)
-data/memory/athena.md    — Athena's long-term notes
-data/memory/user.md      — facts about you (gitignored)
-data/memory/summary.md   — rolling session summaries (gitignored)
-data/memory/embeddings.jsonl — semantic memory vectors (gitignored)
-data/sessions/           — full session transcripts (gitignored)
-skills/                  — self-built skill library
-athena/                  — source code
-runtime/                 — portable Node binaries (gitignored, download separately)
+config/.env                         -- your keys and settings (gitignored)
+data/memory/athena.md               -- Athena's long-term notes
+data/memory/user.md                 -- facts about you (gitignored)
+data/memory/instincts.md            -- auto-promoted behavioral patterns
+data/memory/prohibited_patterns.md  -- dead ends on this machine
+data/memory/summary.md              -- rolling session summaries (gitignored)
+data/memory/embeddings.jsonl        -- semantic memory vectors (gitignored)
+data/memory/machines/               -- longitudinal machine fingerprints
+data/memory/task_state.json         -- watcher checkpoint (last interrupted task)
+data/sessions/                      -- full session transcripts (gitignored)
+skills/                             -- self-built skill library
+athena/                             -- source code
+runtime/                            -- portable Node binaries (gitignored)
 ```
 
 ## Source layout
 
 ```
 athena/
-  athena.mjs      entry point (CLI + UI)
-  api.mjs         LLM API calls — OpenAI, Anthropic, NVIDIA streaming
-  compress.mjs    tool output compression (JSON, code, logs, text)
-  capabilities.mjs machine capability detection at startup
-  config.mjs      env loading, constants, model lists
-  core.mjs        turn loop, task runner, context compression
-  embed.mjs       semantic embeddings, cosine similarity search
-  memory.mjs      long-term memory read/write, session save
-  paths.mjs       all filesystem paths
-  personality.mjs Athena's character, voice, and system prompt builder
-  skills.mjs      skill scan, load, save, update
-  tools.mjs       all tool definitions and execution
-  ui.mjs          browser UI server, SSE broadcast, HTML
-  agents.mjs      multi-agent pool, shared workspace
+  athena.mjs        entry point (CLI + UI)
+  api.mjs           LLM streaming, provider failover (OpenAI + Anthropic)
+  agents.mjs        multi-agent pool, CORAL versioned log, shared workspace
+  audit.mjs         append-only tool call audit trail
+  capabilities.mjs  machine capability detection at boot
+  compress.mjs      tool output compression (JSON, code, logs)
+  config.mjs        env loading, constants, model lists
+  core.mjs          turn loop, task runner, crystallization, watcher drain
+  embed.mjs         embeddings, cosine similarity recall
+  machines.mjs      fingerprinting, trend, runtime state capture + diff
+  memory.mjs        long-term memory, instinct promotion, prohibited patterns
+  network.mjs       network situational awareness tool
+  paths.mjs         all filesystem paths
+  personality.mjs   system prompt builder (memory + instincts + prohibited)
+  remediate.mjs     guided remediation playbooks
+  report.mjs        system / security / network report generator
+  skills.mjs        skill scan, load, save, update, status verification
+  threat.mjs        threat surface assessment
+  tools.mjs         all tool definitions, handlers, classifyRisk()
+  triage.mjs        boot health check
+  ui.mjs            browser UI server, SSE streaming, HTML
+  watcher.mjs       proactive background polling engine
 ```
 
 ## Security
 
-- Your API keys sit in `config/.env` in plaintext. If you lose the drive or plug into a compromised machine, treat the keys as burned and rotate them.
-- `AUTO_APPROVE=true` in `.env` means Athena runs shell commands and writes files without asking. Only use on machines you fully trust.
-- In UI mode without `AUTO_APPROVE`, destructive tools (`run_shell`, `write_file`, `edit_file`) are blocked for the main agent — background agents spawned via `spawn_agent` auto-approve since they run unattended.
-- Do not plug this into locked-down or monitored environments (work, government, someone else's secured box). An agent running shell commands and calling out to an API is exactly what those systems flag.
+- API keys sit in `config/.env` in plaintext. If you lose the drive, rotate the keys.
+- `AUTO_APPROVE=true` in `.env` skips all approval gates. Only use on machines you fully trust.
+- Tiered autonomy: read-only tools run silently, low-impact writes are logged, destructive operations block for explicit approval.
+- Auto-crystallized skills are `status: unverified` and require user approval (Tier 2) before first execution. Approval promotes to verified -- chain-loading an unverified skill from inside a verified one still triggers the approval gate.
+- Prohibited patterns are logged to `prohibited_patterns.md` when a tool chain fails repeatedly. This prevents Athena from re-attempting known broken approaches on the same machine.
+
+---
 
 ## Roadmap
 
-| Phase | What shipped | Status |
-|-------|-------------|--------|
-| **1** | Portable launchers (Windows/macOS/Linux), chat, shell + file tools, basic memory | ✓ done |
-| **2** | Web fetch, live web search, patch/diff editing, multi-step task runner | ✓ done |
-| **3** | Rolling session summaries, session save/resume, smarter context management | ✓ done |
-| **4** | Modular architecture, multi-provider (Anthropic + NVIDIA), semantic recall + embeddings | ✓ done |
-| **5** | Multi-agent system, self-building skill library, full web UI, security hardening, tool output compression, codebase cleanup | ✓ done |
-| **6** | Machine capability detection — languages, compilers, GPUs, containers, browsers, IDEs, databases, MCP servers detected at boot and injected into system prompt. Portable Python + Loki-RS malware scanner bundled on the drive, zero host footprint | ✅ current |
+| Phase | What shipped |
+|-------|-------------|
+| **1** | Portable launchers (Windows/macOS/Linux), chat, shell + file tools, basic memory |
+| **2** | Web fetch, live web search, patch/diff editing, multi-step task runner (`/task`) |
+| **3** | Rolling session summaries, session save/resume, auto-compression at 40 messages |
+| **4** | Multi-provider (OpenAI + Anthropic), semantic recall via embeddings |
+| **5** | Multi-agent system, skill library, full web UI, tool output compression |
+| **6** | Machine capability detection at boot, portable Python + Loki scanner |
+| **8** | Tiered autonomy -- `classifyRisk()` replaces flat DESTRUCTIVE set (Tier 0/1/2) |
+| **9** | Auto-crystallization -- post-task cheap-model hook saves repeatable patterns as skills |
+| **10** | Instinct auto-promotion -- conf-scored patterns promoted to `instincts.md` after 3+ sessions |
+| **11** | Longitudinal machine records -- UUID, visit history, capability drift tracking |
+| **12** | Proactive watcher -- disk, KP41 crashes, CPU temp, network change monitoring |
+| **13-15** | CORAL peer learning, API failover (OpenAI <-> Anthropic) |
+| **16a** | CORAL versioned pull model -- version-tracked, pull-at-turn-boundary, no race conditions |
+| **16b** | Watcher preemption fix -- alert queueing during active turns, task state checkpoint |
+| **16c** | Negative knowledge -- `prohibited_patterns.md` injected into system prompt |
+| **16d** | `query_machine_logs` -- filtered OS event log queries before LLM context |
+| **16e** | `diff_machine_state` -- runtime process/port/driver diff vs boot baseline |
+| **16f** | Skill trust chain -- unverified skills blocked (Tier 2), CORAL platform filtering, circular crystallization prevention |

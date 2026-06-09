@@ -21,6 +21,8 @@ export const PATHS = {
   agentMem: join(ROOT, 'data', 'memory', 'athena.md'),
   userMem:  join(ROOT, 'data', 'memory', 'user.md'),
   summary:  join(ROOT, 'data', 'memory', 'summary.md'),
+  instincts:   join(ROOT, 'data', 'memory', 'instincts.md'),
+  prohibited:  join(ROOT, 'data', 'memory', 'prohibited_patterns.md'),
   sessDir:  join(ROOT, 'data', 'sessions'),
   skills:   join(ROOT, 'skills'),
   tools:    join(ROOT, 'tools'),

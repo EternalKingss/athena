@@ -1,18 +1,18 @@
-// api.mjs — LLM API calls (OpenAI-compatible + Anthropic Claude)
+// api.mjs -- LLM API calls (OpenAI-compatible + Anthropic Claude)
 import {
-  API_KEY, BASE, NVIDIA_KEY, NVIDIA_BASE,
+  API_KEY, BASE,
   ANTHROPIC_KEY, ANTHROPIC_BASE, ANTHROPIC_VERSION,
-  VOYAGE_KEY, CURATED_MODELS, state,
+  CURATED_MODELS, state,
 } from './config.mjs';
 
 // ---- Provider detection ----
 function resolveProvider() {
   const m = state.activeModel;
-  if (m.startsWith('claude-'))
+  if (m.startsWith('claude-')) {
+    if (!ANTHROPIC_KEY) throw new Error('Claude model selected but ANTHROPIC_API_KEY is not set in config/.env');
     return { provider: 'anthropic', base: ANTHROPIC_BASE, key: ANTHROPIC_KEY };
-  const isNvidia = CURATED_MODELS.find(g => g.label === 'NVIDIA')?.models.includes(m);
-  if (isNvidia && NVIDIA_KEY)
-    return { provider: 'openai', base: NVIDIA_BASE, key: NVIDIA_KEY };
+  }
+  if (!API_KEY) throw new Error('No API key set. Add OPENAI_API_KEY or ANTHROPIC_API_KEY to config/.env');
   return { provider: 'openai', base: BASE, key: API_KEY };
 }
 
@@ -65,6 +65,72 @@ function extractSystem(messages) {
 // ---- Retry / backoff (Pillar 11) ----
 const RETRYABLE = new Set([429, 502, 503, 504]);
 
+// ---- Phase 15: API failover ----
+// Tracks quota/auth failures per provider. When a provider hits its failure
+// threshold, calls are transparently rerouted to the next available provider.
+// Order: OpenAI → Anthropic (whichever keys are configured).
+const _providerFailures = { openai: 0, anthropic: 0 };
+const FAILOVER_THRESHOLD = 2;   // failures before switching
+const FAILOVER_RESET_MS  = 15 * 60 * 1000; // reset counts after 15 min
+const _failoverResetAt   = { openai: 0, anthropic: 0 };
+
+function recordProviderFailure(provider) {
+  const now = Date.now();
+  if (now > _failoverResetAt[provider]) {
+    _providerFailures[provider] = 0;
+    _failoverResetAt[provider]  = now + FAILOVER_RESET_MS;
+  }
+  _providerFailures[provider]++;
+  if (_providerFailures[provider] >= FAILOVER_THRESHOLD) {
+    console.warn(`[api:failover] Provider "${provider}" hit failure threshold -- will auto-switch`);
+  }
+}
+
+function isProviderBlocked(provider) {
+  if (Date.now() > _failoverResetAt[provider]) {
+    _providerFailures[provider] = 0;
+  }
+  return _providerFailures[provider] >= FAILOVER_THRESHOLD;
+}
+
+// Returns a provider object, skipping any that are currently blocked.
+// Falls back gracefully: if all providers are blocked, clears counts and uses default.
+function resolveProviderWithFailover() {
+  const base = resolveProvider();
+  const prov = base.provider === 'anthropic' ? 'anthropic' : 'openai';
+
+  if (!isProviderBlocked(prov)) return { ...base, providerKey: prov };
+
+  // Try failover order
+  const order = [
+    API_KEY       && { provider: 'openai',    base: BASE,          key: API_KEY,       providerKey: 'openai'    },
+    ANTHROPIC_KEY && { provider: 'anthropic', base: ANTHROPIC_BASE, key: ANTHROPIC_KEY, providerKey: 'anthropic' },
+  ].filter(Boolean);
+
+  for (const candidate of order) {
+    if (!isProviderBlocked(candidate.providerKey)) {
+      // Switch active model to something the failover provider supports
+      const fallbackModel = candidate.providerKey === 'anthropic' ? 'claude-haiku-4-5-20251001' : 'gpt-4o-mini';
+      console.warn(`[api:failover] Switching from "${prov}" to "${candidate.providerKey}" (model: ${fallbackModel})`);
+      state.activeModel = fallbackModel;
+      return candidate;
+    }
+  }
+
+  // All providers blocked -- reset and use the default
+  for (const k of Object.keys(_providerFailures)) _providerFailures[k] = 0;
+  return { ...base, providerKey: prov };
+}
+
+export function getProviderStatus() {
+  return Object.entries(_providerFailures).map(([prov, fails]) => ({
+    provider: prov,
+    failures: fails,
+    blocked:  isProviderBlocked(prov),
+    resetAt:  _failoverResetAt[prov] ? new Date(_failoverResetAt[prov]).toISOString() : null,
+  }));
+}
+
 function mkHttpError(status, text, res) {
   const err = new Error(`HTTP ${status}: ${text}`);
   err.status = status;
@@ -80,17 +146,17 @@ async function withRetry(fn, maxAttempts = 4) {
     catch (err) {
       if (attempt === maxAttempts || !RETRYABLE.has(err.status)) throw err;
       const wait = err.retryAfter != null ? err.retryAfter * 1000 : delay;
-      console.debug(`[api] HTTP ${err.status} — retrying in ${Math.round(wait / 1000)}s (attempt ${attempt}/${maxAttempts})`);
+      console.debug(`[api] HTTP ${err.status} -- retrying in ${Math.round(wait / 1000)}s (attempt ${attempt}/${maxAttempts})`);
       await new Promise(r => setTimeout(r, wait));
       delay = Math.min(delay * 2, 32000);
     }
   }
 }
 
-// ---- Single-shot (non-streaming) — used for compression summaries ----
+// ---- Single-shot (non-streaming) -- used for compression summaries ----
 export async function chat(messages) {
   return withRetry(async () => {
-    const { provider, base, key } = resolveProvider();
+    const { provider, base, key, providerKey } = resolveProviderWithFailover();
 
     if (provider === 'anthropic') {
       const res = await fetch(`${base}/messages`, {
@@ -107,7 +173,12 @@ export async function chat(messages) {
           messages:   toAnthropicMessages(messages),
         }),
       });
-      if (!res.ok) throw mkHttpError(res.status, await res.text(), res);
+      if (!res.ok) {
+        const errText = await res.text();
+        // Quota / auth errors → record for failover
+        if (res.status === 429 || res.status === 401 || res.status === 403) recordProviderFailure(providerKey);
+        throw mkHttpError(res.status, errText, res);
+      }
       const data = await res.json();
       return { role: 'assistant', content: data.content?.find(b => b.type === 'text')?.text || '' };
     }
@@ -117,7 +188,11 @@ export async function chat(messages) {
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
       body: JSON.stringify({ model: state.activeModel, messages }),
     });
-    if (!res.ok) throw mkHttpError(res.status, await res.text(), res);
+    if (!res.ok) {
+      const errText = await res.text();
+      if (res.status === 429 || res.status === 401 || res.status === 403) recordProviderFailure(providerKey);
+      throw mkHttpError(res.status, errText, res);
+    }
     const data = await res.json();
     return data.choices?.[0]?.message ?? { content: '' };
   });
@@ -125,12 +200,17 @@ export async function chat(messages) {
 
 // ---- Streaming generator ----
 export async function* chatStream(messages, tools) {
-  const { provider, base, key } = resolveProvider();
-  if (provider === 'anthropic') {
-    yield* claudeStream(messages, tools, base, key);
-    return;
+  const { provider, base, key, providerKey } = resolveProviderWithFailover();
+  try {
+    if (provider === 'anthropic') {
+      yield* claudeStream(messages, tools, base, key);
+      return;
+    }
+    yield* openaiStream(messages, tools, base, key);
+  } catch (err) {
+    if (err.status === 429 || err.status === 401 || err.status === 403) recordProviderFailure(providerKey);
+    throw err;
   }
-  yield* openaiStream(messages, tools, base, key);
 }
 
 // ---- OpenAI streaming ----
@@ -181,7 +261,7 @@ async function* openaiStream(messages, tools, base, key) {
   }
 }
 
-// ---- Claude streaming — yields OpenAI-shaped chunks for core.mjs compatibility ----
+// ---- Claude streaming -- yields OpenAI-shaped chunks for core.mjs compatibility ----
 async function* claudeStream(messages, tools, base, key) {
   const anthropicTools = toAnthropicTools(tools);
   const body = {
@@ -294,40 +374,15 @@ async function* claudeStream(messages, tools, base, key) {
   }
 }
 
-// ---- Embedding generation — Voyage AI → NVIDIA NIM → OpenAI (Pillar 8) ----
+// ---- Embedding generation ----
 export async function generateEmbedding(text) {
-  // Voyage AI — best for code/technical content
-  if (VOYAGE_KEY) {
-    const res = await fetch('https://api.voyageai.com/v1/embeddings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${VOYAGE_KEY}` },
-      body: JSON.stringify({ model: 'voyage-3', input: [text] }),
-    });
-    if (!res.ok) throw new Error(`Voyage API ${res.status}: ${await res.text()}`);
-    const data = await res.json();
-    return data.data[0].embedding;
-  }
-
-  // NVIDIA NIM
-  if (NVIDIA_KEY) {
-    const res = await fetch(`${NVIDIA_BASE}/embeddings`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${NVIDIA_KEY}` },
-      body: JSON.stringify({ model: 'nvidia/nv-embedqa-e5-v5', input: [text], input_type: 'query' }),
-    });
-    if (!res.ok) throw new Error(`NVIDIA Embedding API ${res.status}: ${await res.text()}`);
-    const data = await res.json();
-    return data.data[0].embedding;
-  }
-
-  // OpenAI
-  if (!API_KEY) throw new Error('No embedding provider configured. Add VOYAGE_API_KEY, NVIDIA_API_KEY, or OPENAI_API_KEY to config/.env.');
-  const res = await fetch(`${BASE}/embeddings`, {
+  if (!API_KEY) throw new Error('No embedding provider configured. Add OPENAI_API_KEY to config/.env.');
+  const res = await fetch(BASE + '/embeddings', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${API_KEY}` },
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + API_KEY },
     body: JSON.stringify({ model: 'text-embedding-3-small', input: text }),
   });
-  if (!res.ok) throw new Error(`Embedding API ${res.status}: ${await res.text()}`);
+  if (!res.ok) throw new Error('Embedding API ' + res.status + ': ' + await res.text());
   const data = await res.json();
   return data.data[0].embedding;
 }

@@ -1,6 +1,8 @@
-// core.mjs — turn loop, task runner, context compression
+// core.mjs -- turn loop, task runner, context compression
 import { chat, chatStream } from './api.mjs';
-import { TOOLS, DESTRUCTIVE, runTool } from './tools.mjs';
+import { TOOLS, DESTRUCTIVE, classifyRisk, runTool } from './tools.mjs';
+import { loadFingerprint } from './machines.mjs';
+import { saveSkill, updateSkill, scanSkills } from './skills.mjs';
 import { systemPrompt } from './personality.mjs';
 import { AUTO, state, API_KEY, ANTHROPIC_KEY } from './config.mjs';
 import { compressOutput } from './compress.mjs';
@@ -19,7 +21,7 @@ export function setInterrupt() { if (_turnActive) _interrupted = true; }
 export function isActive() { return _turnActive; }
 
 // Background agents get a no-op clarify so they never block waiting for user input
-const _noopInput = async (question) => `(background agent — cannot ask user: ${question})`;
+const _noopInput = async (question) => `(background agent -- cannot ask user: ${question})`;
 
 
 // ---- Context compression ----
@@ -35,12 +37,12 @@ async function maybeCompress(messages, emit, currentTodos = []) {
   if (middle.length < 6) return;
 
   // ---- Boundary safety ----
-  // The end slice must start on a clean message boundary — a real user message,
+  // The end slice must start on a clean message boundary -- a real user message,
   // not a tool result. If it starts mid tool-call sequence (role:'tool' or an
   // assistant with tool_calls whose results are in end), the API returns HTTP 400.
   //
   // Fix: walk forward in end until we hit the first role:'user' message.
-  // Everything before that belongs with its tool_calls pair — move it to middle.
+  // Everything before that belongs with its tool_calls pair -- move it to middle.
   const safeStart = end.findIndex(m => m.role === 'user');
   if (safeStart > 0) {
     middle = [...middle, ...end.slice(0, safeStart)];
@@ -56,7 +58,7 @@ async function maybeCompress(messages, emit, currentTodos = []) {
   if (middle.length < 4) return; // not worth compressing after boundary adjustments
 
   emit({ type: 'system', text: `Compressing ${middle.length} messages to stay within context…` });
-  // Use cheapest available model for compression — no reason to burn expensive tokens on housekeeping
+  // Use cheapest available model for compression -- no reason to burn expensive tokens on housekeeping
   const savedModel = state.activeModel;
   if (API_KEY) state.activeModel = 'gpt-4o-mini';
   else if (ANTHROPIC_KEY) state.activeModel = 'claude-haiku-4-5-20251001';
@@ -65,7 +67,7 @@ async function maybeCompress(messages, emit, currentTodos = []) {
       { role: 'system', content: 'Summarize this conversation in 10-15 bullet points. Be specific: include filenames, commands, values, decisions, problems solved, current state. No preamble.' },
       { role: 'user', content: middle.filter(m => m.role === 'user' || m.role === 'assistant').map(m => `${m.role}: ${m.content || '[tool]'}`).join('\n') },
     ]);
-    const summary = { role: 'assistant', content: `[Context compressed — ${middle.length} messages → summary]\n${sum.content || ''}` };
+    const summary = { role: 'assistant', content: `[Context compressed -- ${middle.length} messages → summary]\n${sum.content || ''}` };
     const todoReinject = currentTodos.length
       ? [{ role: 'user', content: `[Task list after compression]\n${JSON.stringify(currentTodos)}` }]
       : [];
@@ -93,6 +95,7 @@ export async function turn(messages, emit, opts = {}) {
 
   const MAX_TOOL_ITERATIONS = 50;
   let toolIterations = 0;
+  const onTurnStart = opts.onTurnStart || null;
 
   // ---- Loop / stall detection (Agent Introspection) ----
   // Tracks the last N tool calls. If the same tool+args combo repeats 3x in a row
@@ -108,6 +111,7 @@ export async function turn(messages, emit, opts = {}) {
   }
 
   while (true) {
+    if (onTurnStart) onTurnStart();
     if (toolIterations >= MAX_TOOL_ITERATIONS) {
       emit({ type: 'error', message: `Stopped after ${MAX_TOOL_ITERATIONS} tool iterations to prevent runaway loop.` });
       emit({ type: 'done' }); return;
@@ -148,7 +152,17 @@ export async function turn(messages, emit, opts = {}) {
     }
     messages.push(msg);
 
-    if (!msg.tool_calls?.length) { if (!opts.isolated) _turnActive = false; emit({ type: 'done' }); return; }
+    if (!msg.tool_calls?.length) {
+      if (!opts.isolated) {
+        _turnActive = false;
+        // Phase 16b: drain any watcher alerts that queued while we were mid-turn
+        try {
+          const { drainPendingAlerts } = await import('./watcher.mjs').catch(() => ({}));
+          if (drainPendingAlerts) drainPendingAlerts(emit);
+        } catch {}
+      }
+      emit({ type: 'done' }); return;
+    }
     toolIterations++;
 
     // ---- Execute tool calls ----
@@ -158,32 +172,44 @@ export async function turn(messages, emit, opts = {}) {
       return { call, args };
     });
 
-    // Destructive approval: background agents auto-approve (they run unattended)
-    let batchApproved = AUTO || opts.isolated;
+    // Tiered approval (Phase 8)
+    const _machineProfile = loadFingerprint();
+    const autoApproveAll = AUTO || opts.isolated;
+    const classified = calls.map(({ call, args }) => ({
+      call, args,
+      risk: classifyRisk(call.function.name, args, _machineProfile),
+    }));
+
+    let batchApproved = autoApproveAll;
     if (!batchApproved && process.env.ATHENA_UI !== '1') {
-      const destructive = calls.filter(({ call }) => DESTRUCTIVE.has(call.function.name));
-      if (destructive.length) {
-        emit({ type: 'approval_request', calls: destructive.map(({ call, args }) => ({
-          name: call.function.name, preview: args.command || args.path || JSON.stringify(args).slice(0, 80),
+      const tier2 = classified.filter(({ risk }) => risk.tier === 2);
+      if (tier2.length) {
+        emit({ type: 'approval_request', calls: tier2.map(({ call, args, risk }) => ({
+          name: call.function.name,
+          preview: (args.command || args.path || JSON.stringify(args).slice(0, 80)),
+          reason: risk.reason,
         }))});
-        batchApproved = await cliApprove(destructive, emit);
+        batchApproved = await cliApprove(tier2, emit);
       }
     }
 
     const toolResults = [];
     let loopDetected = false;
-    for (const { call, args } of calls) {
-      const isDestructive = DESTRUCTIVE.has(call.function.name);
+    for (const { call, args, risk } of classified) {
       emit({ type: 'tool_start', name: call.function.name, args });
+      if (risk.tier === 1 && !opts.isolated) {
+        emit({ type: 'action_taken', name: call.function.name, reason: risk.reason, args });
+      }
+      const approved = autoApproveAll || batchApproved || risk.tier < 2;
       let result;
       try {
         result = await runTool(
           call.function.name, args,
-          batchApproved || !isDestructive,
+          approved,
           agentTodos, setAgentTodos, inputHandler
         );
       } catch (e) {
-        result = `Error: ${e.message}`;
+        result = 'Error: ' + e.message;
       }
       emit({ type: 'tool_result', name: call.function.name, result });
       // Sync the UI todo strip whenever the todo tool updates the task list
@@ -193,7 +219,7 @@ export async function turn(messages, emit, opts = {}) {
       const compressed = compressOutput(String(result), call.function.name);
       toolResults.push({ role: 'tool', tool_call_id: call.id, content: compressed });
 
-      // Loop detection — same tool+args 3x in a row = inject introspection prompt
+      // Loop detection -- same tool+args 3x in a row = inject introspection prompt
       if (detectLoop(call.function.name, args)) loopDetected = true;
     }
     messages.push(...toolResults);
@@ -203,16 +229,16 @@ export async function turn(messages, emit, opts = {}) {
     // This breaks the retry cycle and makes Athena explain + change approach.
     if (loopDetected) {
       recentCalls.length = 0; // reset so one injection is enough
-      emit({ type: 'system', text: 'Loop detected — running self-diagnosis…' });
+      emit({ type: 'system', text: 'Loop detected -- running self-diagnosis…' });
       messages.push({
         role: 'user',
         content: [
           '[introspection] You have called the same tool with the same arguments 3 times in a row without progress.',
           'STOP retrying. Run the four-phase self-diagnosis:',
-          '1. CAPTURE — What exactly failed? What were you trying to achieve?',
-          '2. DIAGNOSE — Which pattern applies: tool loop, environment mismatch, bad assumption, permission issue, wrong file path, context drift?',
-          '3. RECOVER — What is the SMALLEST different action you can take? Change one thing.',
-          '4. REPORT — State what you found and what you are doing differently. Then proceed with the new approach.',
+          '1. CAPTURE -- What exactly failed? What were you trying to achieve?',
+          '2. DIAGNOSE -- Which pattern applies: tool loop, environment mismatch, bad assumption, permission issue, wrong file path, context drift?',
+          '3. RECOVER -- What is the SMALLEST different action you can take? Change one thing.',
+          '4. REPORT -- State what you found and what you are doing differently. Then proceed with the new approach.',
           'Do NOT repeat the same call again.',
         ].join('\n'),
       });
@@ -222,7 +248,7 @@ export async function turn(messages, emit, opts = {}) {
     if (_interrupted && !opts.isolated) {
       _interrupted = false;
       _turnActive  = false;
-      emit({ type: 'system', text: 'Interrupted — summarising...' });
+      emit({ type: 'system', text: 'Interrupted -- summarising...' });
       messages.push({ role: 'user', content: 'You were interrupted mid-task. Briefly summarise: what did you accomplish so far, and what was still left to do?' });
       let summary = '';
       try {
@@ -234,11 +260,11 @@ export async function turn(messages, emit, opts = {}) {
             emit({ type: 'token', content: delta.content });
           }
         }
-      } catch { /* non-fatal — fall through to push placeholder */ }
+      } catch { /* non-fatal -- fall through to push placeholder */ }
       if (summary) {
         emit({ type: 'stream_end' });
       } else {
-        // Stream failed or returned nothing — show the fallback visibly
+        // Stream failed or returned nothing -- show the fallback visibly
         summary = 'Interrupted. I may have been mid-task; just let me know what to continue.';
         emit({ type: 'stream_start' });
         emit({ type: 'token', content: summary });
@@ -278,21 +304,69 @@ export async function runTask(goal, messages, emit) {
       `Goal: ${goal}`,
       ``,
       `BEFORE you start executing, define your harness:`,
-      `1. OBJECTIVE — restate the goal in one sentence (what you own, what you don't)`,
-      `2. DONE CRITERIA — list 1-3 specific, verifiable conditions that mean this task is complete`,
-      `3. INPUTS/OUTPUTS — what you need, what you will produce`,
+      `1. OBJECTIVE -- restate the goal in one sentence (what you own, what you don't)`,
+      `2. DONE CRITERIA -- list 1-3 specific, verifiable conditions that mean this task is complete`,
+      `3. INPUTS/OUTPUTS -- what you need, what you will produce`,
       ``,
       `Then use the todo tool to build your step list, execute step by step, and check each step against your done criteria.`,
       ``,
       `When finished, produce a HANDOFF: what was done, current state, and any follow-up needed.`,
-      `If a step fails 2+ times, STOP and apply introspection — change approach before retrying.`,
+      `If a step fails 2+ times, STOP and apply introspection -- change approach before retrying.`,
       ``,
       `Promote any repeatable pattern from this task to a skill with save_skill.`,
     ].join('\n'),
   };
   messages.push(taskMsg);
-  await turn(messages, emit);
+
+  const toolTrace = [];
+  const tracingEmit = ev => {
+    if (ev.type === 'tool_start') toolTrace.push({ name: ev.name, args: ev.args });
+    emit(ev);
+  };
+  await turn(messages, tracingEmit);
+
+  // Phase 9: auto-crystallization
+  // Strip load_skill calls -- crystallizing from another skill's trace causes drift loops
+  const CRYSTALLIZE_MIN_TOOLS = 4;
+  const primitiveTrace = toolTrace.filter(t => t.name !== 'load_skill');
+  if (primitiveTrace.length >= CRYSTALLIZE_MIN_TOOLS) {
+    crystallize(goal, primitiveTrace, emit).catch(() => {});
+  }
 }
+
+// Phase 9: crystallize helper
+export async function crystallize(goal, toolTrace, emit) {
+  const savedModel = state.activeModel;
+  if (API_KEY) state.activeModel = 'gpt-4o-mini';
+  else if (ANTHROPIC_KEY) state.activeModel = 'claude-haiku-4-5-20251001';
+  try {
+    const traceText = toolTrace.map(t =>
+      t.name + '(' + Object.entries(t.args || {}).map(([k, v]) => k + '=' + JSON.stringify(v).slice(0, 60)).join(', ') + ')'
+    ).join('\n');
+    const res = await chat([
+      { role: 'system', content: 'You are a skill extractor for an AI agent. Analyse the tool trace and decide if it encodes a general, repeatable pattern.' },
+      { role: 'user', content: 'Task goal: ' + goal + '\n\nTool call trace (' + toolTrace.length + ' calls):\n' + traceText + '\n\nIs this a repeatable pattern worth saving as a reusable skill?\nReply in this EXACT JSON format (no markdown): {"repeatable": true/false, "skillName": "kebab-case-name", "description": "one-line description", "content": "markdown skill instructions"}\nIf not repeatable, reply: {"repeatable": false}' },
+    ]);
+    let parsed;
+    try { parsed = JSON.parse((res.content || '').trim()); } catch { return; }
+    if (!parsed || !parsed.repeatable || !parsed.skillName) return;
+    const existing = scanSkills().find(s => s.dir === parsed.skillName);
+    if (existing) {
+      await updateSkill(parsed.skillName, parsed.description, parsed.content, 'unverified');
+      emit({ type: 'system', text: 'Crystallized: updated skill "' + parsed.skillName + '" (unverified -- will verify on next successful use)' });
+    } else {
+      await saveSkill(parsed.skillName, parsed.description, parsed.content, 'unverified');
+      emit({ type: 'system', text: 'Crystallized: new skill "' + parsed.skillName + '" saved (unverified -- will verify on next successful use)' });
+    }
+    broadcastSkill(parsed.skillName, parsed.description, parsed.content, emit);
+  } catch { } finally {
+    state.activeModel = savedModel;
+  }
+}
+
+let _broadcastSkill = () => {};
+export function setBroadcastSkill(fn) { _broadcastSkill = fn; }
+function broadcastSkill(...args) { _broadcastSkill(...args); }
 
 // ---- Fresh message array factory ----
 export function freshMessages() {

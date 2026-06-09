@@ -55,9 +55,9 @@ const PLAYBOOKS = {
       explain: 'Installs all available macOS software updates.',
     },
     win32: {
-      check:   'wmic qfe list brief /format:table 2>nul | tail -5',
-      steps:   ['powershell -Command "Install-Module PSWindowsUpdate -Force; Import-Module PSWindowsUpdate; Install-WindowsUpdate -AcceptAll -AutoReboot"'],
-      explain: 'Installs all pending Windows updates (requires restart).',
+      check:   'powershell -NoProfile -Command "Get-HotFix | Sort-Object InstalledOn -Descending | Select-Object -First 5 | Format-Table HotFixID,InstalledOn,Description"',
+      steps:   ['powershell -Command "Start-Process ms-settings:windowsupdate"'],
+      explain: 'Opens Windows Update. Install updates from there. For automated install: Install-Module PSWindowsUpdate -Force first.',
     },
   },
   disk: {
@@ -72,9 +72,9 @@ const PLAYBOOKS = {
       explain: 'Removes Homebrew caches older than 7 days.',
     },
     win32: {
-      check:   'wmic logicaldisk get Caption,FreeSpace,Size /format:list 2>nul',
+      check:   'powershell -NoProfile -Command "Get-CimInstance Win32_LogicalDisk -Filter DriveType=3 | Select DeviceID,@{n=\'SizeGB\';e={[math]::Round($_.Size/1GB,1)}},@{n=\'FreeGB\';e={[math]::Round($_.FreeSpace/1GB,1)}} | Format-Table -AutoSize"',
       steps:   ['cleanmgr /sagerun:1'],
-      explain: 'Runs Windows Disk Cleanup in unattended mode.',
+      explain: 'Runs Windows Disk Cleanup in unattended mode. Also try: del /s /q %TEMP%\* and Clear-RecycleBin in PowerShell.',
     },
   },
   suid: {
@@ -82,6 +82,24 @@ const PLAYBOOKS = {
       check:   'find /usr /bin /sbin -perm /4000 -type f 2>/dev/null',
       steps:   [],
       explain: 'SUID binaries must be reviewed case-by-case. Use "sudo chmod u-s <path>" to remove the SUID bit from unnecessary binaries.',
+    },
+  },
+  crash: {
+    win32: {
+      check:   'powershell -NoProfile -Command "Get-WinEvent -FilterHashtable @{LogName=\'System\'; Id=41} -MaxEvents 5 -ErrorAction SilentlyContinue | Select-Object TimeCreated,Message | Format-List"',
+      steps:   [
+        'sfc /scannow',
+        'DISM /Online /Cleanup-Image /RestoreHealth',
+        'powershell -Command "Start-Process mdsched.exe"',
+      ],
+      explain: 'Kernel-Power 41 = unexpected shutdown/reboot. SFC repairs system files. DISM restores Windows image. mdsched runs RAM diagnostic at next reboot. Common causes: bad RAM, unstable PSU, driver crash, overheating. Open eventvwr.exe for more context.',
+    },
+  },
+  thermal: {
+    win32: {
+      check:   'powershell -NoProfile -Command "Get-CimInstance Win32_Processor | Select Name,LoadPercentage; Write-Host \'\'; Get-CimInstance Win32_Fan -ErrorAction SilentlyContinue | Select Description,DesiredSpeed"',
+      steps:   [],
+      explain: 'Thermal issues cause throttling and crashes. Check: cooler properly seated, clean dust from heatsink/vents, reapply thermal paste if CPU is old. Install HWiNFO64 for live sensor readings. Laptops: ensure vents not blocked.',
     },
   },
 };
@@ -96,6 +114,8 @@ function matchPlaybook(issue) {
   if (/update|upgrade|patch|outdated/i.test(lower))    return PLAYBOOKS.updates;
   if (/disk|space|storage|full\b/i.test(lower))        return PLAYBOOKS.disk;
   if (/suid|setuid/i.test(lower))                       return PLAYBOOKS.suid;
+  if (/crash|kernel.power|bsod|unexpected.*reboot|event.*41/i.test(lower)) return PLAYBOOKS.crash;
+  if (/thermal|overheat|temperature|cooling|hot.*cpu|fan.*speed/i.test(lower)) return PLAYBOOKS.thermal;
   return null;
 }
 

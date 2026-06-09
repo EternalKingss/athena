@@ -4,12 +4,12 @@
 // Zero npm dependencies — only Node built-ins.
 
 import * as readline from 'node:readline/promises';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 
 import { NAME, MODEL, state } from './config.mjs';
 import { PATHS } from './paths.mjs';
 import { systemPrompt } from './personality.mjs';
-import { saveAndSummarize } from './memory.mjs';
+import { saveAndSummarize, pruneOldSessions } from './memory.mjs';
 import { turn, runTask, setRequestUserInput, freshMessages, setInterrupt, isActive } from './core.mjs';
 import { serveUI, uiEmit, queueBootInput } from './ui.mjs';
 import { setAgentFunctions } from './tools.mjs';
@@ -58,8 +58,18 @@ async function runCLI() {
 
   const messages = freshMessages();
   _activeMessages = messages;
-  const rl  = readline.createInterface({ input: process.stdin, output: process.stdout });
+
+  // Readline with history — arrow keys cycle through previous inputs
+  const rl = readline.createInterface({
+    input:  process.stdin,
+    output: process.stdout,
+    terminal: true,
+    historySize: 100,
+  });
   const ask = q => rl.question(q);
+
+  // Prune old session files in the background — non-blocking
+  pruneOldSessions().catch(() => {});
 
   let closing = false;
   const close = async () => {
@@ -130,6 +140,8 @@ async function runCLI() {
     if (input === '/forget') {
       messages.length = 0;
       messages.push({ role: 'system', content: systemPrompt() });
+      messages.push({ role: 'user', content: '[system] Context cleared. Long-term memory files intact. Session conversation history is gone.' });
+      messages.push({ role: 'assistant', content: 'Got it. Context cleared. Memory files intact. What now?' });
       console.log(dim('  context cleared\n')); continue;
     }
 
@@ -197,18 +209,52 @@ detectCapabilities()
     const lastChecked     = fp?.capturedAt ? Date.now() - new Date(fp.capturedAt).getTime() : Infinity;
     const needsFullTriage = lastChecked > SIX_HOURS_MS;
 
-    const bootMsg = needsFullTriage
-      ? '[auto-boot] Drive connected. Run boot_triage and machine_info to check this machine, then greet me with your status report.'
-      : '[auto-boot] Drive connected. Skip the full triage — it ran recently. Just greet me briefly and note the current OS/platform.';
-
-    // UI mode: queueBootInput buffers the message and fires it once the browser connects.
-    // CLI mode: push directly and call turn() while waiting for user input.
-    if (UI_MODE) {
-      queueBootInput(bootMsg);
-    } else if (_activeMessages?.length === 1 && _globalEmit && !isActive()) {
-      _activeMessages.push({ role: 'user', content: bootMsg });
-      await turn(_activeMessages, _globalEmit).catch(() => {});
+    // Only auto-greet when a full triage is needed (>6h since last check).
+    // For recent checks: just print a static status line in CLI, or stay silent in UI.
+    // This prevents every session creating a trivial "hey" summary entry.
+    if (needsFullTriage) {
+      const _bootAgo = (() => {
+        if (!fp || !fp.capturedAt) return null;
+        const ms = Date.now() - new Date(fp.capturedAt).getTime();
+        const d = Math.floor(ms / 86400000);
+        const h = Math.floor(ms / 3600000);
+        return d > 0 ? d + 'd' : h > 0 ? h + 'h' : 'recently';
+      })();
+      const _bootCtx = _bootAgo
+        ? 'Last seen ' + _bootAgo + ' ago on this machine.'
+        : 'First visit on this machine.';
+      const _sessCount = (() => { try { return readdirSync(PATHS.sessDir).filter(f => f.endsWith('.jsonl') && f !== '.gitkeep').length; } catch { return 0; } })();
+      const _sessNote  = _sessCount > 1 ? ' Session ' + _sessCount + ' with this user.' : ' First session on this drive.';
+      const _diffInstruction = _bootAgo ? ' Also run machine_diff to show what changed since last visit.' : '';
+      const bootMsg = '[auto-boot] ' + _bootCtx + _sessNote + ' Run boot_triage and machine_info.' + _diffInstruction + ' Greet with a sharp status report — what you found, what matters, what to watch. No fluff.';
+      if (UI_MODE) {
+        queueBootInput(bootMsg);
+      } else if (_activeMessages?.length === 1 && _globalEmit && !isActive()) {
+        _activeMessages.push({ role: 'user', content: bootMsg });
+        await turn(_activeMessages, _globalEmit).catch(() => {});
+      }
+    } else {
+      // Recent check — skip LLM boot. CLI: quiet status line. UI: buffered system msg.
+      const { loadFingerprint: lf } = await import('./machines.mjs');
+      const fp2 = lf();
+      const _recentAgo = fp2?.capturedAt
+        ? (() => {
+            const ms = Date.now() - new Date(fp2.capturedAt).getTime();
+            const h = Math.floor(ms / 3600000);
+            return h < 1 ? 'just now' : h + 'h ago';
+          })()
+        : 'unknown';
+      if (UI_MODE) {
+        // Buffer the status — will be delivered when browser connects via SSE drain
+        uiEmit({ type: 'system', text: 'Triage ran ' + _recentAgo + ' — ready.' });
+        uiEmit({ type: 'done' });
+      } else if (_globalEmit) {
+        process.stdout.write(dim('  triage last ran ' + _recentAgo + ' — type to start\n\n'));
+      }
     }
+
+    // Save fingerprint immediately so it's persisted even if session crashes later
+    saveFingerprint(caps).catch(() => {});
 
     // Audit session start
     await logAuditEvent('session_start', { platform: process.platform, arch: process.arch, model: state.activeModel }).catch(() => {});
@@ -218,6 +264,9 @@ detectCapabilities()
 if (UI_MODE) {
   _globalEmit = uiEmit;
   _activeMessages = freshMessages();
+
+  // Prune old sessions in background on UI start
+  pruneOldSessions().catch(() => {});
 
   const uiShutdown = async () => {
     await saveAndSummarize(_activeMessages);
