@@ -205,23 +205,32 @@ athena/
 
 ## Roadmap
 
-| Phase | What shipped |
-|-------|-------------|
-| **1** | Portable launchers (Windows/macOS/Linux), chat, shell + file tools, basic memory |
-| **2** | Web fetch, live web search, patch/diff editing, multi-step task runner (`/task`) |
-| **3** | Rolling session summaries, session save/resume, auto-compression at 40 messages |
-| **4** | Multi-provider (OpenAI + Anthropic), semantic recall via embeddings |
-| **5** | Multi-agent system, skill library, full web UI, tool output compression |
-| **6** | Machine capability detection at boot, portable Python + Loki scanner |
-| **8** | Tiered autonomy -- `classifyRisk()` replaces flat DESTRUCTIVE set (Tier 0/1/2) |
-| **9** | Auto-crystallization -- post-task cheap-model hook saves repeatable patterns as skills |
-| **10** | Instinct auto-promotion -- conf-scored patterns promoted to `instincts.md` after 3+ sessions |
-| **11** | Longitudinal machine records -- UUID, visit history, capability drift tracking |
-| **12** | Proactive watcher -- disk, KP41 crashes, CPU temp, network change monitoring |
-| **13-15** | CORAL peer learning, API failover (OpenAI <-> Anthropic) |
-| **16a** | CORAL versioned pull model -- version-tracked, pull-at-turn-boundary, no race conditions |
-| **16b** | Watcher preemption fix -- alert queueing during active turns, task state checkpoint |
-| **16c** | Negative knowledge -- `prohibited_patterns.md` injected into system prompt |
-| **16d** | `query_machine_logs` -- filtered OS event log queries before LLM context |
-| **16e** | `diff_machine_state` -- runtime process/port/driver diff vs boot baseline |
-| **16f** | Skill trust chain -- unverified skills blocked (Tier 2), CORAL platform filtering, circular crystallization prevention |
+| Phase | Version | What shipped |
+|-------|---------|-------------|
+| **1** | v1.0 | Portable launchers (Windows/macOS/Linux), chat, shell + file tools, basic memory |
+| **2** | v1.1 | Web fetch, live web search, patch/diff editing, multi-step task runner (`/task`) |
+| **3** | v1.2 | Rolling session summaries, session save/resume, auto-compression at 40 messages |
+| **4** | v2.0 | Multi-provider (OpenAI + Anthropic), semantic recall via embeddings |
+| **5** | v2.1 | Multi-agent system, skill library, full web UI, tool output compression |
+| **6** | v2.2 | Machine capability detection at boot, portable Python + Loki scanner |
+| **8** | v3.0 | Tiered autonomy -- `classifyRisk()` replaces flat DESTRUCTIVE set (Tier 0/1/2) |
+| **9** | v3.0 | Auto-crystallization -- post-task cheap-model hook saves repeatable patterns as skills |
+| **10** | v3.0 | Instinct auto-promotion -- conf-scored patterns promoted to `instincts.md` after 3+ sessions |
+| **11** | v3.0 | Longitudinal machine records -- UUID, visit history, capability drift tracking |
+| **12** | v3.0 | Proactive watcher -- disk, KP41 crashes, CPU temp, network change monitoring |
+| **13-15** | v3.0 | CORAL peer learning, API failover (OpenAI <-> Anthropic) |
+| **16a** | v3.0 | CORAL versioned pull model -- version-tracked, pull-at-turn-boundary, no race conditions |
+| **16b** | v3.0 | Watcher preemption fix -- alert queueing during active turns, task state checkpoint |
+| **16c** | v3.0 | Negative knowledge -- `prohibited_patterns.md` injected into system prompt |
+| **16d** | v3.0 | `query_machine_logs` -- filtered OS event log queries before LLM context |
+| **16e** | v3.0 | `diff_machine_state` -- runtime process/port/driver diff vs boot baseline |
+| **16f** | v3.0 | Skill trust chain -- unverified skills blocked (Tier 2), CORAL platform filtering, circular crystallization prevention |
+| **17a** | v3.1 | BM25 offline recall fallback -- keyword search works with no API key or internet |
+| **17b** | v3.1 | Skill versioning + rollback -- every save backed up to `versions/vN.md`, `skill_rollback` tool |
+| **17c** | v3.1 | Token-aware compression -- `tokens.mjs` estimates actual token usage per model budget, not message count |
+| **17d** | v3.1 | Memory GC -- deduplication (Jaccard), contradiction detection, confidence decay for stale instincts |
+| **17e** | v3.1 | Error telemetry -- all errors logged to `data/memory/errors.jsonl`, never silently dropped |
+| **17f** | v3.1 | Expanded watcher -- RAM pressure, CPU spike, battery drain, login failures, pending reboot + alert correlation engine |
+| **17g** | v3.1 | Sudo safety lockout -- 3-strike lockout for 30 min, persisted across restarts |
+| **17h** | v3.1 | Offline-first architecture (L2 Control Engine) -- deterministic diagnostic engine, works with zero API key, zero internet, zero model. OS-aware tool abstraction, confidence-tagged outputs, multi-workflow planner, feedback-driven adaptive loops, truth hierarchy (L2 state immutable, L3 annotates only) |
+| **17i** | v3.1 | Local LLM support (L3) -- llama.cpp server, non-blocking startup, Phi-3.5-mini (~2.2 GB), full tool calling. Graceful degradation: Cloud AI -> Local AI -> Control Engine |
