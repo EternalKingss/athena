@@ -263,12 +263,4 @@ Athena has three intelligence tiers that degrade gracefully:
 | **16d** | v3.0 | `query_machine_logs` -- filtered OS event log queries before LLM context |
 | **16e** | v3.0 | `diff_machine_state` -- runtime process/port/driver diff vs boot baseline |
 | **16f** | v3.0 | Skill trust chain -- unverified skills blocked (Tier 2), CORAL platform filtering, circular crystallization prevention |
-| **17a** | v3.1 | BM25 offline recall fallback -- keyword search works with no API key or internet |
-| **17b** | v3.1 | Skill versioning + rollback -- every save backed up to `versions/vN.md`, `skill_rollback` tool |
-| **17c** | v3.1 | Token-aware compression -- `tokens.mjs` estimates actual token usage per model budget, not message count |
-| **17d** | v3.1 | Memory GC -- deduplication (Jaccard), contradiction detection, confidence decay for stale instincts |
-| **17e** | v3.1 | Error telemetry -- all errors logged to `data/memory/errors.jsonl`, never silently dropped |
-| **17f** | v3.1 | Expanded watcher -- RAM pressure, CPU spike, battery drain, login failures, pending reboot + alert correlation engine |
-| **17g** | v3.1 | Sudo safety lockout -- 3-strike lockout for 30 min, persisted across restarts |
-| **17h** | v3.1 | Offline-first architecture (L2 Control Engine) -- deterministic diagnostic engine, works with zero API key, zero internet, zero model. OS-aware tool abstraction, confidence-tagged outputs, multi-workflow planner, feedback-driven adaptive loops, truth hierarchy (L2 state immutable, L3 annotates only) |
-| **17i** | v3.1 | Local LLM support (L3) -- llama.cpp server, non-blocking startup, Phi-3.5-mini (~2.2 GB), full tool calling. Graceful degradation: Cloud AI -> Local AI -> Control Engine |
+| **17** | v3.1 | Offline-first architecture -- L2 Control Engine (deterministic diagnostics, zero dependencies), L3 local LLM via llama.cpp (non-blocking, Phi-3.5-mini ~2.2 GB). Graceful degradation: Cloud AI -> Local AI -> Control Engine. Also: BM25 offline recall, skill versioning + rollback, token-aware compression, memory GC (dedup/contradiction/decay), error telemetry, expanded watcher (RAM/CPU/battery/login/reboot + alert correlation), sudo lockout |
