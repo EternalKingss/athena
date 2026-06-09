@@ -10,6 +10,7 @@ import { NAME, MODEL, CURATED_MODELS, state } from './config.mjs';
 import { PATHS } from './paths.mjs';
 import { systemPrompt } from './personality.mjs';
 import { turn, runTask, setRequestUserInput, setInterrupt } from './core.mjs';
+import { setModelSwitchCallback } from './api.mjs';
 import { saveAndSummarize, readEntries } from './memory.mjs';
 
 const execAsync = promisify(exec);
@@ -845,8 +846,8 @@ async function loadModels() {
   try {
     const r = await fetch('/models');
     const data = await r.json();
-    S.models = data.models || [];
-    S.currentModel = data.current || '';
+    S.models = data.models || (data.groups || []).flatMap(g => g.models || []);
+    S.currentModel = data.active || data.current || '';
     ['model-select', 'model-select-inline', 'settings-model-select'].forEach(id => {
       const sel = document.getElementById(id);
       if (!sel) return;
@@ -1017,6 +1018,28 @@ async function loadAgentsView() {
     // helpers in ctx sidebar
     loadHelpers(agents);
   } catch {}
+  // Load CORAL log
+  try {
+    const cr = await fetch('/coral');
+    const cdata = await cr.json();
+    const cEntries = cdata.entries || [];
+    const cVersion = cdata.version || 0;
+    const vEl = document.getElementById('coral-version');
+    if (vEl) vEl.textContent = 'v' + cVersion;
+    const feed = document.getElementById('coral-feed');
+    if (feed) {
+      if (!cEntries.length) {
+        feed.innerHTML = '<div class="coral-row"><span class="cv">--</span><span class="cdot" style="background:var(--ink-3)"></span><span class="ctext">No CORAL entries yet.</span></div>';
+      } else {
+        feed.innerHTML = cEntries.slice(-20).reverse().map(e => {
+          const col = e.platform === 'win32' ? 'var(--olive)' : e.platform === 'darwin' ? 'var(--bronze)' : 'var(--lapis)';
+          return '<div class="coral-row"><span class="cv">v' + esc(String(e.version || '--')) + '</span>' +
+            '<span class="cdot" style="background:' + col + '"></span>' +
+            '<span class="ctext">' + esc(e.skill || e.type || '') + ' -- ' + esc((e.summary || e.desc || '').slice(0, 80)) + '</span></div>';
+        }).join('');
+      }
+    }
+  } catch {}
 }
 
 async function loadHelpers(agents) {
@@ -1045,9 +1068,26 @@ async function loadHelpers(agents) {
 
 // ── Sessions view ────────────────────────────────────────────────
 async function loadSessions() {
-  // Session list from /agents (crude -- ideally a /sessions endpoint)
   const list = document.getElementById('sessions-list');
-  if (list) list.innerHTML = '<div class="session-row"><span class="when">--</span><span class="what">Session history coming soon.</span><span class="tools"></span></div>';
+  try {
+    const r = await fetch('/sessions');
+    const data = await r.json();
+    const sessions = data.sessions || [];
+    if (!list) return;
+    if (!sessions.length) {
+      list.innerHTML = '<div class="session-row"><span class="when">--</span><span class="what">No sessions recorded yet.</span><span class="tools"></span></div>';
+      return;
+    }
+    list.innerHTML = sessions.map(s =>
+      '<div class="session-row">' +
+      '<span class="when">' + esc(s.when || '--') + '</span>' +
+      '<span class="what">' + esc(s.what || '') + '</span>' +
+      '<span class="tools">' + (s.tools ? s.tools + ' tools' : '') + '</span>' +
+      '</div>'
+    ).join('');
+  } catch {
+    if (list) list.innerHTML = '<div class="session-row"><span class="when">--</span><span class="what">Could not load sessions.</span><span class="tools"></span></div>';
+  }
 }
 
 // ── Spawn agent ──────────────────────────────────────────────────
@@ -1079,220 +1119,320 @@ setPresence('');
 </script>`;
 }
 
-// ── serveUI ───────────────────────────────────────────────────────
+
+// -- serveUI --
 export async function serveUI(messages) {
   const agentName = NAME || 'Athena';
   const port = await getFreePort();
-  const html   = buildHTML(agentName);
-  const script = buildScript(agentName);
-  const fullHTML = html + '\n' + script + '\n</body>\n</html>';
+  process.env.ATHENA_UI = '1';
+
+  const HTML = buildHTML(agentName) + '\n' + buildScript(agentName) + '\n</body>\n</html>';
+
+  function resetMessages(arr) {
+    arr.length = 0;
+    arr.push({ role: 'system', content: systemPrompt() });
+  }
+
+  let agentFns = null;
+  async function getAgentFns() {
+    if (!agentFns) {
+      const { spawnAgent, listAgents } = await import('./agents.mjs');
+      agentFns = { spawnAgent, listAgents };
+    }
+    return agentFns;
+  }
+
+  // Input queue -- chat route pushes here; main loop pulls
+  let inputResolve = null;
+  const inputQueue = [];
+  function nextInput() {
+    return new Promise(res => {
+      if (inputQueue.length) { res(inputQueue.shift()); return; }
+      inputResolve = res;
+    });
+  }
+  function pushInput(text) {
+    if (inputResolve) { inputResolve(text); inputResolve = null; }
+    else inputQueue.push(text);
+  }
 
   const server = createServer(async (req, res) => {
     const url = req.url.split('?')[0];
     const method = req.method.toUpperCase();
 
-    // ── CORS ─────────────────────────────────────────────────────
-    res.setHeader('Access-Control-Allow-Origin', 'http://127.0.0.1:' + port);
+    res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     if (method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
 
-    // ── Static CSS ───────────────────────────────────────────────
     if (url === '/styles/athena.css') {
       try {
         const css = readFileSync(CSS_PATH, 'utf8');
         res.writeHead(200, { 'Content-Type': 'text/css; charset=utf-8', 'Cache-Control': 'no-cache' });
         res.end(css);
-      } catch {
-        res.writeHead(404); res.end('/* css not found */');
-      }
+      } catch { res.writeHead(404); res.end('/* css not found */'); }
       return;
     }
 
-    // ── Root ─────────────────────────────────────────────────────
-    if (url === '/') {
+    if (url === '/' && method === 'GET') {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
-      res.end(fullHTML);
-      return;
+      res.end(HTML); return;
     }
 
-    // ── SSE ──────────────────────────────────────────────────────
-    if (url === '/events') {
+    if (url === '/events' && method === 'GET') {
       res.writeHead(200, {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
         'Connection': 'keep-alive',
+        'Access-Control-Allow-Origin': '*',
       });
-      res.write(':\n\n'); // keep-alive comment
+      res.write(':\n\n');
       sseClients.add(res);
-      // flush buffered boot events
-      for (const ev of _bootBuffer.splice(0)) {
+      for (const ev of _bootBuffer) {
         try { res.write('data: ' + JSON.stringify(ev) + '\n\n'); } catch {}
       }
-      req.on('close', () => sseClients.delete(res));
+      _bootBuffer.length = 0;
+      for (const txt of _bootInputQueue) pushInput(txt);
+      _bootInputQueue.length = 0;
+      req.on('close', () => { sseClients.delete(res); if (sseClients.size === 0) setInterrupt(); });
       return;
     }
 
-    // ── Chat ─────────────────────────────────────────────────────
     if (url === '/chat' && method === 'POST') {
-      const body = await readBody(req, res);
-      if (!body) return;
-      const data = parseJSON(body, res);
-      if (!data) return;
-      const text = (data.text || '').trim();
-      if (!text) { res.writeHead(400); res.end('{"error":"empty"}'); return; }
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end('{"ok":true}');
-      // boot input queue (used before SSE connected)
-      if (_bootInputQueue.length) {
-        const queued = _bootInputQueue.shift();
-        // ignore the text sent alongside -- use the queued boot input
-        setImmediate(() => turn(queued || text));
-      } else {
-        setImmediate(() => turn(text));
+      const body = await readBody(req, res); if (body === null) return;
+      const data = parseJSON(body, res); if (data === null) return;
+      const { text } = data;
+      if (!text || typeof text !== 'string' || !text.trim()) {
+        res.writeHead(400, { 'Content-Type': 'application/json' }); res.end('{"error":"text required"}'); return;
       }
-      return;
+      res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('{"ok":true}');
+      pushInput(text.trim()); return;
     }
 
-    // ── Stop ─────────────────────────────────────────────────────
-    if (url === '/stop' && method === 'POST') {
-      setInterrupt(true);
-      res.writeHead(200); res.end('{"ok":true}');
-      return;
-    }
-
-    // ── Clear ────────────────────────────────────────────────────
-    if (url === '/clear' && method === 'POST') {
-      // import and reset conversation history
-      try {
-        const { clearHistory } = await import('./core.mjs');
-        if (typeof clearHistory === 'function') clearHistory();
-      } catch {}
-      broadcast({ type: 'system', text: 'Context cleared.' });
-      res.writeHead(200); res.end('{"ok":true}');
-      return;
-    }
-
-    // ── Memory ──────────────────────────────────────────────────
-    if (url === '/memory') {
-      try {
-        const entries = await readEntries();
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ entries: entries || [] }));
-      } catch {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end('{"entries":[]}');
-      }
-      return;
-    }
-
-    // ── Models ───────────────────────────────────────────────────
-    if (url === '/models') {
-      try {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ models: CURATED_MODELS || [], current: state.model || MODEL }));
-      } catch {
-        res.writeHead(200); res.end('{"models":[],"current":""}');
-      }
-      return;
-    }
-
-    // ── Model switch ─────────────────────────────────────────────
-    if (url === '/model' && method === 'POST') {
-      const body = await readBody(req, res);
-      if (!body) return;
-      const data = parseJSON(body, res);
-      if (!data) return;
-      if (data.model && state) state.model = data.model;
-      broadcast({ type: 'model_changed', model: data.model });
-      res.writeHead(200); res.end('{"ok":true}');
-      return;
-    }
-
-    // ── Agents ───────────────────────────────────────────────────
-    if (url === '/agents') {
-      try {
-        const { listAgents } = await import('./agents.mjs');
-        const agents = typeof listAgents === 'function' ? listAgents() : [];
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ agents }));
-      } catch {
-        res.writeHead(200); res.end('{"agents":[]}');
-      }
-      return;
-    }
-
-    // ── Spawn agent ───────────────────────────────────────────────
     if (url === '/spawn' && method === 'POST') {
-      const body = await readBody(req, res);
-      if (!body) return;
-      const data = parseJSON(body, res);
-      if (!data) return;
-      res.writeHead(200); res.end('{"ok":true}');
-      const task = (data.task || '').trim();
-      if (task) setImmediate(() => turn('/spawn ' + task));
+      const body = await readBody(req, res); if (body === null) return;
+      const data = parseJSON(body, res); if (data === null) return;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      const goal = (data.goal || data.task || '').trim();
+      const name = (data.name || 'helper').trim();
+      if (!goal) { res.end('{"error":"goal required"}'); return; }
+      const { spawnAgent } = await getAgentFns();
+      const agentId = spawnAgent(name, goal, uiEmit);
+      res.end(JSON.stringify({ agentId })); return;
+    }
+
+    if (url === '/agents' && method === 'GET') {
+      const { listAgents } = await getAgentFns();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(listAgents())); return;
+    }
+
+    if (url === '/models' && method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ groups: CURATED_MODELS, active: state.activeModel, models: CURATED_MODELS.flatMap(g => g.models || [g]) })); return;
+    }
+
+    if (url === '/model' && method === 'POST') {
+      const body = await readBody(req, res); if (body === null) return;
+      const data = parseJSON(body, res); if (data === null) return;
+      const { model } = data; if (model) state.activeModel = model;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ active: state.activeModel }));
+      broadcast({ type: 'model_changed', model: state.activeModel }); return;
+    }
+
+    if (url === '/stop' && method === 'POST') {
+      setInterrupt();
+      res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('{"ok":true}'); return;
+    }
+
+    if (url === '/clear' && method === 'POST') {
+      resetMessages(messages);
+      res.writeHead(200); res.end(); return;
+    }
+
+    if (url === '/memory' && method === 'GET') {
+      try {
+        const toItems = f => readEntries(f).map(content => ({ type: 'memory', content }));
+        const entries = [...toItems(PATHS.agentMem), ...toItems(PATHS.userMem)];
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ entries }));
+      } catch { res.writeHead(200); res.end('{"entries":[]}'); }
       return;
     }
 
-    // ── Skills ───────────────────────────────────────────────────
-    if (url === '/skills') {
+    if (url === '/skills' && method === 'GET') {
       try {
         const { scanSkills } = await import('./skills.mjs');
-        const raw = await scanSkills();
-        const skills = (raw || []).map(s => ({
-          name: s.name,
-          desc: s.description || s.desc || '',
-          status: s.status || 'unverified',
-        }));
+        const raw = scanSkills();
+        const skills = (raw || []).map(s => {
+          const name = s.dir || s.name || 'unknown';
+          const desc = s.desc || s.description || '';
+          // Read status from SKILL.md frontmatter
+          let status = 'unverified';
+          try {
+            const mdPath = join(PATHS.skills, name, 'SKILL.md');
+            const content = readFileSync(mdPath, 'utf8');
+            const m = content.match(/^status:\s*(.+)$/m);
+            if (m) status = m[1].trim();
+          } catch {}
+          return { name, desc, status };
+        });
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ skills }));
-      } catch {
+      } catch (e) {
+        console.error('[ui:/skills]', e.message);
         res.writeHead(200); res.end('{"skills":[]}');
       }
       return;
     }
 
-    // ── Machine info ─────────────────────────────────────────────
-    if (url === '/machine') {
+    if (url === '/sessions' && method === 'GET') {
       try {
-        const { getFingerprint } = await import('./machines.mjs');
-        const fp = typeof getFingerprint === 'function' ? await getFingerprint() : {};
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(fp));
-      } catch {
-        // fallback -- use Node built-ins
-        try {
-          const os = await import('node:os');
-          const info = {
-            hostname: os.hostname(),
-            os: os.type() + ' ' + os.release(),
-            cpu: os.cpus()[0]?.model || 'unknown',
-            ram: Math.round(os.totalmem() / 1024 / 1024 / 1024) + ' GB',
-            disk: '--',
-            summary: 'Running on ' + os.hostname(),
-          };
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify(info));
-        } catch {
-          res.writeHead(200); res.end('{}');
+        let sessions = [];
+        if (existsSync(PATHS.summary)) {
+          const raw = readFileSync(PATHS.summary, 'utf8').trim();
+          if (raw) {
+            sessions = raw.split(/\n(?=\[)/).filter(e => e.trim()).slice(-20).reverse().map(e => {
+              const dateMatch = e.match(/^\[([^\]]+)\]/);
+              const toolMatch = e.match(/tools used:\s*(\d+)/i);
+              return {
+                when: dateMatch ? dateMatch[1] : '--',
+                what: e.replace(/^\[[^\]]+\]\s*/, '').split('\n')[0].slice(0, 120),
+                tools: toolMatch ? toolMatch[1] : '',
+              };
+            });
+          }
         }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ sessions }));
+      } catch { res.writeHead(200); res.end('{"sessions":[]}'); }
+      return;
+    }
+
+    if (url === '/coral' && method === 'GET') {
+      try {
+        const { getCoralLog, getCoralVersion } = await import('./agents.mjs');
+        const entries = typeof getCoralLog === 'function' ? getCoralLog(0) : [];
+        const version = typeof getCoralVersion === 'function' ? getCoralVersion() : 0;
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ entries, version }));
+      } catch { res.writeHead(200); res.end('{"entries":[],"version":0}'); }
+      return;
+    }
+
+    if (url === '/machine' && method === 'GET') {
+      try {
+        const { loadFingerprint } = await import('./machines.mjs');
+        const fp = loadFingerprint();
+        const sys = fp?.caps?.system || {};
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          hostname: sys.hostname || 'local',
+          os: sys.platform || '--',
+          cpu: (sys.cpuModel || '--').slice(0, 40),
+          ram: sys.ramTotal || '--',
+          disk: sys.disks?.[0] || '--',
+          summary: fp ? 'Machine profiled ' + (fp.capturedAt ? new Date(fp.capturedAt).toLocaleDateString() : '') : 'Not yet profiled.',
+        }));
+      } catch {
+        const os = await import('node:os');
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          hostname: os.hostname(),
+          os: os.type() + ' ' + os.release(),
+          cpu: (os.cpus()[0]?.model || '--').slice(0, 40),
+          ram: Math.round(os.totalmem() / 1024 / 1024 / 1024) + ' GB',
+          disk: '--',
+          summary: 'Running on ' + os.hostname(),
+        }));
       }
       return;
     }
 
-    // ── 404 ───────────────────────────────────────────────────────
-    res.writeHead(404); res.end('not found');
+    res.writeHead(404); res.end();
   });
 
   server.listen(port, '127.0.0.1', () => {
-    const addr = 'http://127.0.0.1:' + port;
-    console.log('[ui] Listening on ' + addr);
-    // Try to open browser
-    const opener =
-      process.platform === 'win32' ? 'start' :
-      process.platform === 'darwin' ? 'open' : 'xdg-open';
-    exec(opener + ' "' + addr + '"', () => {});
+    const url = 'http://127.0.0.1:' + port;
+    console.log('\n  ' + agentName + ' -> ' + url + '\n');
+    const open = process.platform === 'darwin' ? 'open "' + url + '"'
+      : process.platform === 'win32' ? 'start "" "' + url + '"'
+      : 'xdg-open "' + url + '" 2>/dev/null &';
+    exec(open, () => {});
   });
 
-  return { port, server };
+  // Wire model auto-switch broadcast to UI
+  setModelSwitchCallback(model => {
+    broadcast({ type: 'model_changed', model });
+  });
+
+  setRequestUserInput(async (question, choices) => {
+    broadcast({ type: 'clarify', question, choices: choices || [] });
+    return nextInput();
+  });
+
+  // Main chat loop -- waits for input, runs turn(), repeat
+  while (true) {
+    const inp = await nextInput();
+    if (!inp) continue;
+
+    if (inp === '/instincts') {
+      const raw = existsSync(PATHS.instincts) ? readFileSync(PATHS.instincts, 'utf8').trim() : '';
+      const entries = raw ? raw.split('\x15').map(e => e.trim()).filter(Boolean) : [];
+      const { scanForInstincts } = await import('./memory.mjs');
+      const candidates = scanForInstincts(5);
+      const lines = ['INSTINCTS (' + entries.length + ' active):', ...entries.map((e,i) => '  '+(i+1)+'. '+e)];
+      if (candidates.length) { lines.push('', 'CANDIDATES:'); candidates.forEach(c => lines.push('  '+c.tool+' used '+c.count+'x')); }
+      broadcast({ type: 'system', text: lines.join('\n') }); broadcast({ type: 'done' }); continue;
+    }
+    if (inp === '/reload') {
+      if (messages.length > 0 && messages[0].role === 'system') messages[0].content = systemPrompt();
+      broadcast({ type: 'system', text: 'System prompt reloaded.' }); broadcast({ type: 'done' }); continue;
+    }
+    if (inp === '/forget') {
+      resetMessages(messages);
+      messages.push({ role: 'user', content: '[system] Context cleared. Acknowledge briefly.' });
+      messages.push({ role: 'assistant', content: 'Context cleared. Memory files intact. What do you need?' });
+      broadcast({ type: 'system', text: 'Context cleared.' }); broadcast({ type: 'done' }); continue;
+    }
+    if (inp === '/mem') {
+      const m = existsSync(PATHS.agentMem) ? readFileSync(PATHS.agentMem, 'utf8') : '(empty)';
+      broadcast({ type: 'system', text: m }); broadcast({ type: 'done' }); continue;
+    }
+    if (inp === '/status') {
+      const { MEM_CHAR_LIMIT } = await import('./config.mjs');
+      const memChars = existsSync(PATHS.agentMem) ? readFileSync(PATHS.agentMem, 'utf8').length : 0;
+      const memPct = Math.round(memChars / MEM_CHAR_LIMIT * 100);
+      const turns = messages.filter(m => m.role === 'user').length;
+      broadcast({ type: 'system', text: '  model:  ' + state.activeModel + '\n  turns:  ' + turns + '\n  memory: ' + memPct + '%' });
+      broadcast({ type: 'done' }); continue;
+    }
+    if (inp.startsWith('/task ')) {
+      const goal = inp.slice(6).trim();
+      try { await runTask(goal, messages, uiEmit); }
+      catch (e) { broadcast({ type: 'error', message: e.message }); }
+      continue;
+    }
+    if (inp.startsWith('/spawn ')) {
+      const rest = inp.slice(7).trim(); const si = rest.indexOf(' ');
+      if (si !== -1) {
+        const name = rest.slice(0, si); const goal = rest.slice(si + 1);
+        const { spawnAgent } = await getAgentFns();
+        spawnAgent(name, goal, uiEmit);
+        broadcast({ type: 'system', text: 'Agent "' + name + '" spawned.' });
+      }
+      broadcast({ type: 'done' }); continue;
+    }
+    if (inp === '/agents') {
+      const { listAgents } = await getAgentFns();
+      const agents = listAgents();
+      const lines = agents.length ? agents.map(a => (a.status==='done'?'v ':'. ') + a.name + '  ' + (a.goal||'').slice(0,60)) : ['(no agents this session)'];
+      broadcast({ type: 'system', text: lines.join('\n') }); broadcast({ type: 'done' }); continue;
+    }
+
+    messages.push({ role: 'user', content: inp });
+    try { await turn(messages, uiEmit); }
+    catch (e) { broadcast({ type: 'error', message: e.message }); broadcast({ type: 'done' }); }
+  }
 }
