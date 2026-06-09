@@ -1,11 +1,11 @@
-// remediate.mjs — Guided remediation playbooks for common security issues (Pillar 2)
+// remediate.mjs -- Guided remediation playbooks for common security issues (Pillar 2)
 
 const PLAYBOOKS = {
   firewall: {
     linux: {
       check:   'systemctl is-active ufw 2>/dev/null || grep -i "^ENABLED=" /etc/ufw/ufw.conf 2>/dev/null',
       steps:   ['sudo ufw default deny incoming', 'sudo ufw default allow outgoing', 'sudo ufw allow ssh', 'sudo ufw --force enable'],
-      explain: 'Enables UFW firewall — blocks all inbound traffic except SSH.',
+      explain: 'Enables UFW firewall -- blocks all inbound traffic except SSH.',
     },
     darwin: {
       check:   '/usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate',
@@ -130,7 +130,7 @@ export function getRemediationPlan(issue) {
     };
   }
 
-  // Don't fall back to Linux steps on Windows/Mac — wrong package managers, no sudo, etc.
+  // Don't fall back to Linux steps on Windows/Mac -- wrong package managers, no sudo, etc.
   const plan = pb[plat] || (plat === 'linux' ? pb['linux'] : null);
   if (!plan) {
     return {

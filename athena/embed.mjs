@@ -1,6 +1,6 @@
-// embed.mjs — semantic memory engine
+// embed.mjs -- semantic memory engine
 // Embeddings stored as JSONL on the drive. Zero npm deps.
-// Cosine similarity search in pure JS — fast enough for thousands of entries.
+// Cosine similarity search in pure JS -- fast enough for thousands of entries.
 import { existsSync, readFileSync } from 'node:fs';
 import { writeFile, appendFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -52,7 +52,7 @@ export async function embedAndStore({ text, type, tags = [], id }) {
     const embedding = await generateEmbedding(text);
     return await storeEmbedding({ id, text, type, tags, embedding });
   } catch {
-    // Non-fatal — embeddings are best-effort
+    // Non-fatal -- embeddings are best-effort
     return null;
   }
 }
@@ -81,7 +81,7 @@ async function searchSimilar(query, topK = 5, filterType = null) {
 }
 
 // ---- Extract tags from text via simple keyword heuristic ----
-// (no extra API call — fast, good enough for session tagging)
+// (no extra API call -- fast, good enough for session tagging)
 export function extractTags(text) {
   const tags = [];
   const lower = text.toLowerCase();

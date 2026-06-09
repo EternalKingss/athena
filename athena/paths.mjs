@@ -1,4 +1,4 @@
-// paths.mjs — all filesystem paths and startup dir creation
+// paths.mjs -- all filesystem paths and startup dir creation
 import { mkdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -35,7 +35,7 @@ export const PATHS = {
   lokiPy:     join(ROOT, 'tools', 'loki', 'loki.py'),
 };
 
-// Ensure required dirs exist at startup — soft-fail on read-only drives
+// Ensure required dirs exist at startup -- soft-fail on read-only drives
 for (const d of [PATHS.sessDir, PATHS.memDir, PATHS.skills, PATHS.tools]) {
-  try { mkdirSync(d, { recursive: true }); } catch { /* read-only mount — continue */ }
+  try { mkdirSync(d, { recursive: true }); } catch { /* read-only mount -- continue */ }
 }

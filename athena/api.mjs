@@ -90,11 +90,16 @@ function pickModel() {
 }
 
 export function getProviderStatus() {
-  return buildFallbackList().map(model => ({
-    model,
-    failures: _modelFailures[model] || 0,
-    blocked:  isModelBlocked(model),
-  }));
+  return buildFallbackList().map(model => {
+    const prov = providerForModel(model);
+    const provider = prov ? prov.provider : (model.startsWith('claude-') ? 'anthropic' : 'openai');
+    return {
+      model,
+      provider,
+      failures: _modelFailures[model] || 0,
+      blocked:  isModelBlocked(model),
+    };
+  });
 }
 
 // ---- Transform OpenAI-style tools -> Anthropic tools format ----

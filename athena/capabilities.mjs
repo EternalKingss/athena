@@ -1,4 +1,4 @@
-// capabilities.mjs — detect what's installed on the host machine at startup
+// capabilities.mjs -- detect what's installed on the host machine at startup
 import { exec } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir, networkInterfaces } from 'node:os';
@@ -15,7 +15,7 @@ async function probe(cmd) {
     const { stdout } = await execAsync(cmd, { timeout: 5000 });
     return stdout.trim() || null;
   } catch (e) {
-    // Non-zero exit is normal (last which failed) — still return any stdout collected
+    // Non-zero exit is normal (last which failed) -- still return any stdout collected
     return e.stdout?.trim() || null;
   }
 }
@@ -27,7 +27,7 @@ function psCmd(script) {
   return 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ' + buf.toString('base64');
 }
 
-// One subprocess per group — far fewer disk seeks than one-per-binary.
+// One subprocess per group -- far fewer disk seeks than one-per-binary.
 async function checkAll(names) {
   if (!names.length) return [];
   let out;

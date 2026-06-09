@@ -1,4 +1,4 @@
-// audit.mjs — Append-only JSONL audit trail with session replay (Pillar 5)
+// audit.mjs -- Append-only JSONL audit trail with session replay (Pillar 5)
 import { mkdirSync } from 'node:fs';
 import { existsSync, readFileSync } from 'node:fs';
 import { appendFile } from 'node:fs/promises';

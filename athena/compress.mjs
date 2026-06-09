@@ -1,4 +1,4 @@
-// compress.mjs — deterministic tool output compression
+// compress.mjs -- deterministic tool output compression
 // Inspired by headroom's content-type routing + structural compression,
 // reimplemented with zero dependencies using only Node built-ins.
 //
@@ -8,8 +8,8 @@
 //   logs  → deduplicate consecutive similar lines, then head+tail
 //   text  → paragraph-aware or line-based head+tail
 
-const COMPRESS_THRESHOLD = 1500; // chars — skip compression below this
-const HARD_CAP           = 8000; // chars — absolute ceiling after compression
+const COMPRESS_THRESHOLD = 1500; // chars -- skip compression below this
+const HARD_CAP           = 8000; // chars -- absolute ceiling after compression
 
 // ---- Public entry point ----
 export function compressOutput(text, toolName) {
@@ -22,7 +22,7 @@ export function compressOutput(text, toolName) {
   else if (type === 'logs') out = compressLogs(text);
   else                      out = compressText(text);
 
-  // Hard cap — always enforced regardless of type
+  // Hard cap -- always enforced regardless of type
   if (out.length > HARD_CAP) {
     const half = Math.floor(HARD_CAP * 0.6);
     const tail = Math.floor(HARD_CAP * 0.3);
@@ -114,19 +114,19 @@ function compressCode(text) {
   // Remove block comments /* ... */ (non-greedy, dot-all)
   out = out.replace(/\/\*[\s\S]*?\*\//g, '');
 
-  // Remove line comments — // and # (but preserve shebangs and URLs)
+  // Remove line comments -- // and # (but preserve shebangs and URLs)
   out = out.replace(/^[ \t]*\/\/[^\n]*/gm, '');
   out = out.replace(/^[ \t]*#(?!!)[^\n]*/gm, ''); // # but not #!
 
   // Collapse 3+ consecutive blank lines → 1
   out = out.replace(/\n{3,}/g, '\n\n');
 
-  // Trim leading/trailing whitespace on each line (optional — saves chars)
+  // Trim leading/trailing whitespace on each line (optional -- saves chars)
   out = out.split('\n').map(l => l.trimEnd()).join('\n').trim();
 
   if (out.length <= HARD_CAP) return out;
 
-  // Still too long — head+tail
+  // Still too long -- head+tail
   return headTailLines(out, 60, 30);
 }
 
@@ -177,7 +177,7 @@ function compressText(text) {
     return [...head, `\n…[${omitted} paragraphs omitted]…\n`, ...tail].join('\n\n');
   }
 
-  // Not enough paragraphs — line-based
+  // Not enough paragraphs -- line-based
   return headTailLines(text, 30, 20);
 }
 

@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { hostname, cpus, totalmem, networkInterfaces } from 'node:os';
+import { execSync } from 'node:child_process';
 import { join } from 'node:path';
 import { PATHS } from './paths.mjs';
 
@@ -188,7 +189,6 @@ export function machineTrend(fp) {
 
 function safeExec(cmd, timeoutMs) {
   try {
-    const { execSync } = require('child_process');
     return execSync(cmd, { timeout: timeoutMs || 8000, encoding: 'utf8' }).trim();
   } catch { return ''; }
 }

@@ -1,11 +1,11 @@
 /* =========================================================================
-   ATHENA — "The Wise Companion"  ·  warm classical-modern design language
+   ATHENA -- "The Wise Companion"  ·  warm classical-modern design language
    A redesign of the portable AI agent's web UI.
    Palette: ivory marble · olive branch · laurel bronze · terracotta · ink
    ========================================================================= */
 
 :root{
-  /* — Paper & surfaces — */
+  /* -- Paper & surfaces -- */
   --paper:#F4EDDF;          /* warm ivory canvas            */
   --paper-2:#EEE5D2;        /* deeper ivory / inset         */
   --surface:#FBF7EE;        /* card                         */
@@ -15,19 +15,19 @@
   --wash-terra:#F5E0D4;     /* terracotta tint fill         */
   --wash-lapis:#E2EAEF;     /* lapis tint fill              */
 
-  /* — Ink (text) — */
+  /* -- Ink (text) -- */
   --ink:#2C2620;            /* espresso, primary text       */
   --ink-2:#5A5147;          /* muted body                   */
   --ink-3:#8B7F70;          /* faint / captions             */
   --ink-4:#B6AB99;          /* placeholders / disabled      */
 
-  /* — Hairlines — */
+  /* -- Hairlines -- */
   --line:#E4D9C4;
   --line-2:#D7CAB0;
   --line-soft:#EFE7D6;
 
-  /* — Athena's accents — */
-  --olive:#6E7A4B;          /* primary — olive branch       */
+  /* -- Athena's accents -- */
+  --olive:#6E7A4B;          /* primary -- olive branch       */
   --olive-deep:#525C36;
   --olive-bright:#8A975F;
   --bronze:#B0813B;         /* laurel / helmet gold         */
@@ -38,25 +38,25 @@
   --lapis:#3E6E8E;          /* owl-eye blue / info / links  */
   --lapis-deep:#2E5571;
 
-  /* — Status — */
+  /* -- Status -- */
   --success:#5E8B45;
   --warning:#C2902F;
   --danger:#B5462C;
   --danger-soft:#F2DDD3;
 
-  /* — Type — */
+  /* -- Type -- */
   --font-display:"Cormorant Garamond",Georgia,"Times New Roman",serif;
   --font-ui:"Hanken Grotesk",ui-sans-serif,system-ui,sans-serif;
   --font-mono:"JetBrains Mono",ui-monospace,"SFMono-Regular",Consolas,monospace;
 
-  /* — Radius — */
+  /* -- Radius -- */
   --r-sm:9px;
   --r:14px;
   --r-lg:20px;
   --r-xl:26px;
   --r-pill:999px;
 
-  /* — Shadow (warm) — */
+  /* -- Shadow (warm) -- */
   --sh-1:0 1px 2px rgba(74,54,28,.05),0 1px 1px rgba(74,54,28,.04);
   --sh-2:0 2px 6px rgba(74,54,28,.05),0 10px 26px rgba(86,64,30,.07);
   --sh-3:0 4px 14px rgba(74,54,28,.07),0 22px 48px rgba(86,64,30,.10);
@@ -196,7 +196,7 @@ body{
   position:absolute;inset:-7px;border-radius:50%;
   border:2px solid transparent;
 }
-/* state: thinking — rotating bronze arc */
+/* state: thinking -- rotating bronze arc */
 .presence-orb.thinking .ring{
   border-top-color:var(--bronze);border-right-color:rgba(176,129,59,.35);
   animation:spin 1.5s linear infinite;

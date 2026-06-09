@@ -1,4 +1,4 @@
-// triage.mjs — Boot intelligence: health checks wired to detected security tools (Pillars 1 + 9)
+// triage.mjs -- Boot intelligence: health checks wired to detected security tools (Pillars 1 + 9)
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { getCachedCapabilities } from './capabilities.mjs';
@@ -34,23 +34,23 @@ export async function runBootTriage() {
   const checks = [];
 
   // ---- Internet connectivity ----
-  // Quick check — is the machine online? Uses capabilities cache if available, otherwise probes.
+  // Quick check -- is the machine online? Uses capabilities cache if available, otherwise probes.
   const netCaps = caps?.network;
   if (netCaps) {
     const online = Boolean(netCaps.publicIP);
     checks.push({
       name:   'Internet',
       status: online ? 'ok' : 'warn',
-      detail: online ? 'online (' + netCaps.publicIP + ')' : 'no public IP detected — may be offline or blocked',
+      detail: online ? 'online (' + netCaps.publicIP + ')' : 'no public IP detected -- may be offline or blocked',
     });
   } else {
-    // capabilities not cached yet — do a lightweight probe
+    // capabilities not cached yet -- do a lightweight probe
     try {
       const ipRes = await fetch('https://api.ipify.org?format=json', { signal: AbortSignal.timeout(3000) });
       const ipData = await ipRes.json();
       checks.push({ name: 'Internet', status: 'ok', detail: 'online (' + ipData.ip + ')' });
     } catch {
-      checks.push({ name: 'Internet', status: 'warn', detail: 'no response from internet — may be offline' });
+      checks.push({ name: 'Internet', status: 'warn', detail: 'no response from internet -- may be offline' });
     }
   }
 
@@ -63,7 +63,7 @@ export async function runBootTriage() {
     const out = await probe('/usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate 2>/dev/null', 'firewall');
     fwStatus = /enabled/i.test(out) ? 'enabled' : 'disabled';
   } else if (hasTool(sec, 'ufw')) {
-    // ufw status requires root — use systemctl or /etc/ufw/ufw.conf as rootless fallback
+    // ufw status requires root -- use systemctl or /etc/ufw/ufw.conf as rootless fallback
     const svcOut = await probe('systemctl is-active ufw 2>/dev/null', 'firewall-ufw-svc');
     if (/^active/.test(svcOut.trim())) {
       fwStatus = 'active';
@@ -83,7 +83,7 @@ export async function runBootTriage() {
   // ---- Disk space ----
   const disks = caps?.system?.disks || [];
   for (const d of disks) {
-    // df -h outputs G/Gi on Linux/Mac; wmic computes GB on Windows — match all forms
+    // df -h outputs G/Gi on Linux/Mac; wmic computes GB on Windows -- match all forms
     const freeM  = d.match(/(\d+\.?\d*)\s*G[iB]*\s+free/i);
     const totalM = d.match(/(\d+\.?\d*)\s*G[iB]*\s+total/i) || d.match(/:\s*(\d+\.?\d*)\s*G[iB]*\s*\(/i);
     const label  = (d.split(':')[0] || 'Disk').trim();
@@ -122,13 +122,13 @@ export async function runBootTriage() {
 
   // ---- SSH exposure ----
   if (!isWin) {
-    // Linux: ss with netstat fallback. Mac: lsof or netstat (different output format — uses .22 not :22)
+    // Linux: ss with netstat fallback. Mac: lsof or netstat (different output format -- uses .22 not :22)
     const sshCmd = isMac
       ? "lsof -nP -iTCP:22 -sTCP:LISTEN 2>/dev/null | tail -n +2 | head -3 || netstat -an 2>/dev/null | grep -E '\\.22\\s.*LISTEN' | head -3"
       : "ss -tlnp 2>/dev/null | grep -E ':22\\s|:22$' | head -3 || netstat -tlnp 2>/dev/null | grep ':22' | head -3";
     const out = await probe(sshCmd, 'ssh');
     if (out) {
-      checks.push({ name: 'SSH', status: 'warn', detail: 'Port 22 listening — verify key-based auth is enforced' });
+      checks.push({ name: 'SSH', status: 'warn', detail: 'Port 22 listening -- verify key-based auth is enforced' });
     }
   }
 
@@ -186,7 +186,7 @@ export async function runBootTriage() {
     const upDays = parseInt(uptOut?.match(/Uptime=(\d+)/)?.[1] || '', 10);
     if (!isNaN(upDays)) checks.push({
       name: 'Uptime', status: upDays > 30 ? 'warn' : 'ok',
-      detail: upDays === 0 ? 'Less than 1 day' : upDays + ' day' + (upDays !== 1 ? 's' : '') + (upDays > 30 ? ' — long uptime, pending reboot likely' : ''),
+      detail: upDays === 0 ? 'Less than 1 day' : upDays + ' day' + (upDays !== 1 ? 's' : '') + (upDays > 30 ? ' -- long uptime, pending reboot likely' : ''),
     });
 
     // RAM + CPU
@@ -223,17 +223,17 @@ export async function runBootTriage() {
     const kp41Count = parseInt(kp41Out?.match(/KP41=(\d+)/)?.[1] || '0', 10);
     if (kp41Count > 0) {
       const kp41Times = (kp41Out || '').split('\n').filter(l => l.startsWith('KP41:')).map(l => l.slice(6)).join(', ');
-      checks.push({ name: 'Unexpected reboots', status: kp41Count >= 3 ? 'critical' : 'warn', detail: kp41Count + ' in last 7 days' + (kp41Times ? ': ' + kp41Times : '') + ' — investigate thermal/RAM/PSU' });
+      checks.push({ name: 'Unexpected reboots', status: kp41Count >= 3 ? 'critical' : 'warn', detail: kp41Count + ' in last 7 days' + (kp41Times ? ': ' + kp41Times : '') + ' -- investigate thermal/RAM/PSU' });
     }
 
     // Windows Update
     if (typeof wuOut === 'string') {
       const pending = parseInt(wuOut.trim(), 10);
       if (!isNaN(pending)) checks.push({ name: 'System updates', status: pending > 0 ? 'warn' : 'ok', detail: pending > 0 ? pending + ' Windows updates pending' : 'Up to date' });
-      else checks.push({ name: 'System updates', status: 'unknown', detail: 'COM check returned no data — run Windows Update manually' });
+      else checks.push({ name: 'System updates', status: 'unknown', detail: 'COM check returned no data -- run Windows Update manually' });
     } else {
       const wuReason = wuOut?._err?.killed || /timed?.?out/i.test(wuOut?._err?.message || '') ? 'check timed out' : 'COM check failed';
-      checks.push({ name: 'System updates', status: 'unknown', detail: wuReason + ' — run Windows Update manually' });
+      checks.push({ name: 'System updates', status: 'unknown', detail: wuReason + ' -- run Windows Update manually' });
     }
   }
 
@@ -257,7 +257,7 @@ export async function runBootTriage() {
 const STATUS_ICON = { ok: '✓', warn: '⚠', critical: '✗', info: 'ℹ', unknown: '?' };
 
 export function formatTriageReport(triage) {
-  const lines = [`Boot Triage — ${new Date().toLocaleString()}`, ''];
+  const lines = [`Boot Triage -- ${new Date().toLocaleString()}`, ''];
   for (const c of triage.checks) {
     lines.push(`  ${STATUS_ICON[c.status] || '?'} ${c.name}: ${c.detail}`);
   }
