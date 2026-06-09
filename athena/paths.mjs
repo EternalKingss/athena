@@ -27,6 +27,10 @@ export const PATHS = {
   skills:   join(ROOT, 'skills'),
   tools:    join(ROOT, 'tools'),
 
+  errorsLog:  join(ROOT, 'data', 'memory', 'errors.jsonl'),
+  gcState:    join(ROOT, 'data', 'memory', 'gc_state.json'),
+  sudoState:  join(ROOT, 'data', 'memory', 'sudo_attempts.json'),
+
   // Portable runtimes bundled on the drive
   runtime:    RUNTIME,
   python:     isWin ? join(RUNTIME, 'python', 'python.exe')     : join(RUNTIME, 'python', 'bin', 'python3'),

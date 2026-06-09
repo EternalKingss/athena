@@ -1,16 +1,17 @@
 // tools.mjs
 import { readFile, readdir, stat, writeFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve, join, isAbsolute, delimiter } from 'node:path';
 import { exec, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { BRAVE_KEY, AUTO } from './config.mjs';
 import { PATHS } from './paths.mjs';
 import { handleMemoryTool, logProhibitedPattern } from './memory.mjs';
-import { loadSkill, saveSkill, updateSkill, getSkillStatus } from './skills.mjs';
+import { loadSkill, saveSkill, updateSkill, getSkillStatus, rollbackSkill, listSkillVersions } from './skills.mjs';
 import { handleRecallTool } from './embed.mjs';
 import { getCachedCapabilities, detectCapabilities, clearCapabilityCache } from './capabilities.mjs';
 import { logAuditEvent } from './audit.mjs';
+import { logError } from './telemetry.mjs';
 import { getRemediationPlan } from './remediate.mjs';
 
 let _agentFns = null;
@@ -71,13 +72,46 @@ export const TOOLS = [
   { type: 'function', function: { name: 'machine_health_trend', description: 'Show longitudinal health trend for this machine: visit history, capability changes over time, usage frequency, and any detected deterioration patterns.', parameters: { type: 'object', properties: {} } } },
   { type: 'function', function: { name: 'machine_diff', description: 'Compare the current machine state against the last saved fingerprint. Shows what tools, languages, or hardware changed since the last visit.', parameters: { type: 'object', properties: {} } } },
   { type: 'function', function: { name: 'remediate', description: 'Get a guided remediation plan for a security or system issue. Returns exact commands to fix the problem. Set execute:true to apply the fix (requires approval).', parameters: { type: 'object', properties: { issue: { type: 'string', description: 'The issue to fix, e.g. "firewall not enabled", "ssh root login allowed", "pending updates"' }, execute: { type: 'boolean' } }, required: ['issue'] } } },
+  { type: 'function', function: { name: 'skill_rollback', description: 'Roll back a skill to a prior version. Use list_versions:true to see available versions.', parameters: { type: 'object', properties: { name: { type: 'string' }, version: { type: 'number' }, list_versions: { type: 'boolean' } }, required: ['name'] } } },
 ];
+
+// ---- Sudo lockout safety ----
+// Track failed sudo attempts per machine to avoid PAM account lockout.
+function _loadSudoState() {
+  try {
+    if (existsSync(PATHS.sudoState)) return JSON.parse(readFileSync(PATHS.sudoState, 'utf8'));
+  } catch {}
+  return {};
+}
+
+async function _checkSudoLockout() {
+  const s = _loadSudoState();
+  const machineId = process.env.ATHENA_MACHINE_ID || 'default';
+  const rec = s[machineId] || {};
+  if (rec.lockedUntil && Date.now() < rec.lockedUntil) {
+    const remaining = Math.ceil((rec.lockedUntil - Date.now()) / 60000);
+    return { locked: true, message: `sudo locked for ${remaining} more min (3 failed attempts -- try manually)` };
+  }
+  return { locked: false, machineId, state: s, rec };
+}
+
+async function _recordSudoAttempt(machineId, state, success) {
+  const rec = state[machineId] || { count: 0 };
+  if (success) { rec.count = 0; rec.lockedUntil = null; }
+  else {
+    rec.count = (rec.count || 0) + 1;
+    rec.lastAttempt = Date.now();
+    if (rec.count >= 3) rec.lockedUntil = Date.now() + 30 * 60 * 1000; // 30 min lockout
+  }
+  state[machineId] = rec;
+  await writeFile(PATHS.sudoState, JSON.stringify(state, null, 2)).catch(e => logError('sudoState', e));
+}
 
 export async function runTool(name, args, preApproved, sessionTodos, setSessionTodos, requestUserInput) {
   const ok = preApproved || AUTO;
 
   // Audit every tool call (non-blocking, best-effort)
-  logAuditEvent('tool_call', { tool: name, args }).catch(() => {});
+  logAuditEvent('tool_call', { tool: name, args }).catch(e => logError('auditEvent', e));
 
   if (name === 'run_shell') {
     if (!ok) throw new Error('not approved');
@@ -97,9 +131,14 @@ export async function runTool(name, args, preApproved, sessionTodos, setSessionT
     } catch (e) {
       // Auto-retry with sudo on permission errors (Linux/Mac only -- Windows uses UAC not sudo)
       if (isPermErr(e.message) && process.platform !== 'win32' && !args.command.trimStart().startsWith('sudo ')) {
+        const lock = await _checkSudoLockout();
+        if (lock.locked) return lock.message;
         try {
-          return await runCmd('sudo ' + args.command);
+          const result = await runCmd('sudo ' + args.command);
+          await _recordSudoAttempt(lock.machineId, lock.state, true);
+          return result;
         } catch (e2) {
+          await _recordSudoAttempt(lock.machineId, lock.state, false);
           throw new Error(e2.message);
         }
       }
@@ -349,6 +388,17 @@ export async function runTool(name, args, preApproved, sessionTodos, setSessionT
     return 'Stored in workspace[' + JSON.stringify(args.key) + ']';
   }
 
+  if (name === 'skill_rollback') {
+    if (args.list_versions) {
+      const versions = listSkillVersions(args.name);
+      return versions.length
+        ? 'Available versions for "' + args.name + '": ' + versions.map(v => 'v' + v).join(', ')
+        : 'No saved versions for "' + args.name + '".';
+    }
+    if (!args.version) return 'version number required (or pass list_versions:true to see options).';
+    return await rollbackSkill(args.name, args.version);
+  }
+
   return 'Unknown tool: ' + name;
 }
 
@@ -359,7 +409,7 @@ export function classifyRisk(name, args, machineProfile) {
     'machine_info', 'boot_triage', 'threat_assess', 'network_scan',
     'generate_report', 'audit_replay', 'machine_diff', 'machine_health_trend',
     'workspace_read', 'spawn_agent', 'save_skill', 'update_skill',
-    'query_machine_logs', 'diff_machine_state',
+    'query_machine_logs', 'diff_machine_state', 'skill_rollback',
   ]);
   if (safe.has(name)) return { tier: 0, reason: 'read-only or informational' };
 

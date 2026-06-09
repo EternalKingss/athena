@@ -2,9 +2,10 @@
 import { chat, chatStream } from './api.mjs';
 import { TOOLS, DESTRUCTIVE, classifyRisk, runTool } from './tools.mjs';
 import { loadFingerprint } from './machines.mjs';
-import { saveSkill, updateSkill, scanSkills } from './skills.mjs';
+import { saveSkill, updateSkill, scanSkills, recordSkillResult } from './skills.mjs';
 import { systemPrompt } from './personality.mjs';
 import { AUTO, state, API_KEY, ANTHROPIC_KEY } from './config.mjs';
+import { estimateMessages, getModelBudget } from './tokens.mjs';
 import { compressOutput } from './compress.mjs';
 
 // ---- Session state ----
@@ -25,12 +26,15 @@ const _noopInput = async (question) => `(background agent -- cannot ask user: ${
 
 
 // ---- Context compression ----
-const COMPRESS_AT        = 40;
 const COMPRESS_KEEP_START = 2;
 const COMPRESS_KEEP_END   = 15;
 
 async function maybeCompress(messages, emit, currentTodos = []) {
-  if (messages.length < COMPRESS_AT) return;
+  // Token-aware: compress when estimated tokens reach 75% of model budget,
+  // OR as a safety net when message count hits 80 (prevents unbounded growth).
+  const tokenBudget = getModelBudget(state.activeModel);
+  const estimated   = estimateMessages(messages);
+  if (estimated < tokenBudget * 0.75 && messages.length < 80) return;
   const start  = messages.slice(0, COMPRESS_KEEP_START);
   let end      = messages.slice(-COMPRESS_KEEP_END);
   let middle   = messages.slice(COMPRESS_KEEP_START, -COMPRESS_KEEP_END);
@@ -57,7 +61,7 @@ async function maybeCompress(messages, emit, currentTodos = []) {
 
   if (middle.length < 4) return; // not worth compressing after boundary adjustments
 
-  emit({ type: 'system', text: `Compressing ${middle.length} messages to stay within context…` });
+  emit({ type: 'system', text: `Compressing ${middle.length} messages (~${estimated} tokens estimated, budget ${tokenBudget})…` });
   // Use cheapest available model for compression -- no reason to burn expensive tokens on housekeeping
   const savedModel = state.activeModel;
   if (API_KEY) state.activeModel = 'gpt-4o-mini';
@@ -74,7 +78,7 @@ async function maybeCompress(messages, emit, currentTodos = []) {
     messages.length = 0;
     messages.push(...start, summary, ...todoReinject, ...end);
     emit({ type: 'system', text: `Compressed (${middle.length} → 1). Continuing…` });
-  } catch { /* non-fatal */ } finally {
+  } catch (e) { import('./telemetry.mjs').then(({ logError }) => logError('compression', e)).catch(() => {}); } finally {
     state.activeModel = savedModel;
   }
 }
@@ -96,6 +100,8 @@ export async function turn(messages, emit, opts = {}) {
   const MAX_TOOL_ITERATIONS = 50;
   let toolIterations = 0;
   const onTurnStart = opts.onTurnStart || null;
+  let _lastLoadedSkill = null;
+  let _hadToolError    = false;
 
   // ---- Loop / stall detection (Agent Introspection) ----
   // Tracks the last N tool calls. If the same tool+args combo repeats 3x in a row
@@ -161,6 +167,7 @@ export async function turn(messages, emit, opts = {}) {
           if (drainPendingAlerts) drainPendingAlerts(emit);
         } catch {}
       }
+      if (_lastLoadedSkill) { recordSkillResult(_lastLoadedSkill, !_hadToolError); _lastLoadedSkill = null; }
       emit({ type: 'done' }); return;
     }
     toolIterations++;
@@ -218,6 +225,17 @@ export async function turn(messages, emit, opts = {}) {
       }
       const compressed = compressOutput(String(result), call.function.name);
       toolResults.push({ role: 'tool', tool_call_id: call.id, content: compressed });
+
+      // Skill success/failure tracking
+      if (call.function.name === 'load_skill' && args.name) {
+        const r = String(result);
+        if (!r.startsWith('Skill "') && !r.startsWith('Error:')) _lastLoadedSkill = args.name;
+      }
+      if (String(result).startsWith('Error: ') && _lastLoadedSkill) {
+        recordSkillResult(_lastLoadedSkill, false);
+        _lastLoadedSkill = null;
+        _hadToolError = true;
+      }
 
       // Loop detection -- same tool+args 3x in a row = inject introspection prompt
       if (detectLoop(call.function.name, args)) loopDetected = true;
@@ -330,7 +348,10 @@ export async function runTask(goal, messages, emit) {
   const CRYSTALLIZE_MIN_TOOLS = 4;
   const primitiveTrace = toolTrace.filter(t => t.name !== 'load_skill');
   if (primitiveTrace.length >= CRYSTALLIZE_MIN_TOOLS) {
-    crystallize(goal, primitiveTrace, emit).catch(() => {});
+    crystallize(goal, primitiveTrace, emit).catch(e => {
+      // Non-fatal -- crystallization failures are best-effort
+      import('./telemetry.mjs').then(({ logError }) => logError('crystallize', e)).catch(() => {});
+    });
   }
 }
 
