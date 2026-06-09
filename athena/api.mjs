@@ -224,7 +224,7 @@ export async function chat(messages) {
           throw mkHttpError(res.status, t, res);
         }
         const data = await res.json();
-        return data.choices?.[0]?.message ?? { content: '' };
+        return data.choices?.[0]?.message ?? { role: 'assistant', content: '' };
       });
     } catch (err) {
       if (FAILOVER_TRIGGERS.has(err.status)) {
