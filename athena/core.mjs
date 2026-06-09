@@ -189,15 +189,22 @@ export async function turn(messages, emit, opts = {}) {
     }));
 
     let batchApproved = autoApproveAll;
-    if (!batchApproved && process.env.ATHENA_UI !== '1') {
+    if (!batchApproved) {
       const tier2 = classified.filter(({ risk }) => risk.tier === 2);
       if (tier2.length) {
-        emit({ type: 'approval_request', calls: tier2.map(({ call, args, risk }) => ({
-          name: call.function.name,
-          preview: (args.command || args.path || JSON.stringify(args).slice(0, 80)),
-          reason: risk.reason,
-        }))});
-        batchApproved = await cliApprove(tier2, emit);
+        if (process.env.ATHENA_UI !== '1') {
+          emit({ type: 'approval_request', calls: tier2.map(({ call, args, risk }) => ({
+            name: call.function.name,
+            preview: (args.command || args.path || JSON.stringify(args).slice(0, 80)),
+            reason: risk.reason,
+          }))});
+          batchApproved = await cliApprove(tier2, emit);
+        } else {
+          // UI mode: show gate for the first pending Tier 2 call, batch-approve on yes
+          emit({ type: 'approval_required', tool: tier2[0].call.function.name, args: tier2[0].args, tier: 2, reason: tier2[0].risk.reason });
+          const resp = await inputHandler('Approve? (yes/no)', ['yes', 'no']);
+          batchApproved = (resp || '').toLowerCase().startsWith('y');
+        }
       }
     }
 
