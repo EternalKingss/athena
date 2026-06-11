@@ -212,6 +212,10 @@ async function runCLI() {
   if (modelPath) {
     const modelId = getLocalModelName() || ('local-' + modelPath.split('/').pop().replace(/\.gguf$/i, '').toLowerCase().replace(/[\s_.]+/g, '-'));
     registerLocalModel(modelId);
+    // Offline: make the local model the active model so token-budget-aware compression
+    // uses the local context window (8192) instead of gpt-4o's 120k -- otherwise context
+    // overflows the local model before compression ever triggers.
+    if (isOfflineMode()) state.activeModel = modelId;
     // Fire and forget -- Athena is immediately usable at L2 while LLM loads in background
     const emit = ev => { if (_globalEmit) _globalEmit(ev); };
     startLocalLLM(LOCAL_LLM_PORT, emit).catch(() => {});
