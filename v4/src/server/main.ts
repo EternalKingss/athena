@@ -23,13 +23,13 @@ export async function startServer(options: ServerOptions = {}) {
     type: "capability_changed",
     capability: "sqlite",
     available: selfCheck.sqliteAvailable,
-    reason: selfCheck.sqliteAvailable ? undefined : "node:sqlite unavailable",
+    ...(selfCheck.sqliteAvailable ? {} : { reason: "node:sqlite unavailable" }),
   });
   bus.emit({
     type: "capability_changed",
     capability: "sqlite_fts5",
     available: selfCheck.fts5Available,
-    reason: selfCheck.fts5Available ? undefined : "FTS5 probe failed",
+    ...(selfCheck.fts5Available ? {} : { reason: "FTS5 probe failed" }),
   });
   bus.emit({ type: "boot_ready" });
 
