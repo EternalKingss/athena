@@ -18,14 +18,14 @@
     "lint": "node scripts/lint.mjs",
     "verify": "pnpm run lint && pnpm run typecheck && pnpm run test && pnpm run build"
   },
-  "dependencies": {
+  "dependencies": {},
+  "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "latest",
+    "@types/node": "latest",
     "esbuild": "latest",
     "svelte": "latest",
     "typescript": "latest",
     "vite": "latest",
-    "vitest": "latest",
-    "ws": "latest"
-  },
-  "devDependencies": {}
+    "vitest": "latest"
+  }
 }
