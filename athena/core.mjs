@@ -182,14 +182,19 @@ export async function turn(messages, emit, opts = {}) {
 
     // Tiered approval (Phase 8)
     const _machineProfile = loadFingerprint();
-    const autoApproveAll = AUTO || opts.isolated;
+    // Isolated (background) agents auto-run Tier 0/1 but must NOT silently
+    // auto-approve Tier 2 destructive actions -- they have no human to approve.
+    // Only the global AUTO_APPROVE flag may blanket-approve everything.
+    const autoApproveAll = AUTO;
     const classified = calls.map(({ call, args }) => ({
       call, args,
       risk: classifyRisk(call.function.name, args, _machineProfile),
     }));
 
     let batchApproved = autoApproveAll;
-    if (!batchApproved) {
+    // Background agents cannot prompt a human -- skip the gate so Tier 2 calls
+    // stay unapproved (runTool denies them) instead of blocking forever.
+    if (!batchApproved && !opts.isolated) {
       const tier2 = classified.filter(({ risk }) => risk.tier === 2);
       if (tier2.length) {
         if (process.env.ATHENA_UI !== '1') {

@@ -32,6 +32,19 @@ async function runPS(script) {
   return (stdout || '').trim() || (stderr || '').trim() || '(no output)';
 }
 
+// Run a command WITHOUT a shell -- arguments are passed literally, so $(...),
+// backticks, and $VAR never expand. Used by Tier 0 tools (notify/open) so a
+// prompt-injected target string cannot achieve silent code execution.
+function spawnQuiet(cmd, args) {
+  return new Promise(resolve => {
+    let proc;
+    try { proc = spawn(cmd, args, { stdio: 'ignore' }); }
+    catch { return resolve(false); }
+    proc.on('error', () => resolve(false));
+    proc.on('close', () => resolve(true));
+  });
+}
+
 function stripHtml(html) {
   return html
     .replace(/<style[\s\S]*?<\/style>/gi, '').replace(/<script[\s\S]*?<\/script>/gi, '')
@@ -229,18 +242,24 @@ export async function runTool(name, args, preApproved, sessionTodos, setSessionT
       const ps = "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('" + safeMsg + "','" + safeTitle + "') | Out-Null";
       await runPS(ps).catch(() => {});
     } else if (process.platform === 'darwin') {
-      const cmd = 'osascript -e ' + JSON.stringify('display notification ' + JSON.stringify(String(args.message)) + ' with title ' + JSON.stringify(String(args.title)));
-      await execAsync(cmd).catch(() => {});
+      // No shell -- AppleScript source is a single literal arg to osascript.
+      const script = 'display notification ' + JSON.stringify(String(args.message)) + ' with title ' + JSON.stringify(String(args.title));
+      await spawnQuiet('osascript', ['-e', script]);
     } else {
-      await execAsync('notify-send ' + JSON.stringify(String(args.title)) + ' ' + JSON.stringify(String(args.message))).catch(() => {});
+      await spawnQuiet('notify-send', [String(args.title), String(args.message)]);
     }
     return 'Notified: ' + args.title;
   }
 
   if (name === 'open') {
-    const t = JSON.stringify(String(args.target));
-    const cmd = process.platform === 'win32' ? 'start "" ' + t : process.platform === 'darwin' ? 'open ' + t : 'xdg-open ' + t;
-    await execAsync(cmd).catch(() => {});
+    const target = String(args.target);
+    if (process.platform === 'win32') {
+      // Start-Process via base64 EncodedCommand -- no cmd metacharacter exposure.
+      const safe = target.split("'").join("''");
+      await runPS("Start-Process '" + safe + "'").catch(() => {});
+    } else {
+      await spawnQuiet(process.platform === 'darwin' ? 'open' : 'xdg-open', [target]);
+    }
     return 'Opened ' + args.target;
   }
 
@@ -262,18 +281,26 @@ export async function runTool(name, args, preApproved, sessionTodos, setSessionT
 
   if (name === 'load_skill') {
     const status = getSkillStatus(args.name);
+    // Unverified (auto-crystallized) skills are Tier 2. If the gate was NOT passed,
+    // do not load and do NOT promote -- denial must actually deny.
+    if (status === 'unverified' && !ok) {
+      return 'load_skill denied: "' + args.name + '" is unverified and was not approved. Skill not loaded, not promoted.';
+    }
     const skillContent = loadSkill(args.name);
     if (status === 'unverified') {
-      // Reaching here means the Tier 2 approval gate was passed -- promote to verified.
+      // Approval gate passed -- promote to verified.
       const existingDesc = (skillContent.match(/^description:\s*(.+)$/m) || [])[1] || '';
       const body = skillContent.replace(/^---[\s\S]*?---\n+/, '');
-      updateSkill(args.name, existingDesc, body, 'verified').catch(() => {});
+      // Await so the promotion is persisted before we claim it verified.
+      await updateSkill(args.name, existingDesc, body, 'verified').catch(() => {});
       return '[NOW VERIFIED: ' + args.name + ' -- approved by user, promoted from unverified]\n\n' + skillContent;
     }
     return skillContent;
   }
-  if (name === 'save_skill')   return await saveSkill(args.name, args.description, args.content);
-  if (name === 'update_skill') return await updateSkill(args.name, args.description, args.content);
+  // Skills written by the model are unverified -- they only become verified after a
+  // human approves the Tier 2 gate on first load_skill. Closes the trust-chain bypass.
+  if (name === 'save_skill')   return await saveSkill(args.name, args.description, args.content, 'unverified');
+  if (name === 'update_skill') return await updateSkill(args.name, args.description, args.content, 'unverified');
 
   if (name === 'machine_info') {
     if (args.rescan) clearCapabilityCache();
