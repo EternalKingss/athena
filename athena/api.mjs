@@ -48,8 +48,7 @@ function isModelBlocked(model) {
 
 // ---- Build priority-ordered model fallback list ----
 // Current model first, then rest of same provider group, then other groups.
-function buildFallbackList() {
-  const current = state.activeModel;
+function buildFallbackList(current = state.activeModel) {
   const result  = [];
   let currentGroupIdx = -1;
   for (let i = 0; i < CURATED_MODELS.length; i++) {
@@ -78,16 +77,22 @@ function buildFallbackList() {
 }
 
 // ---- Pick the best available model, update state, broadcast if changed ----
-function pickModel() {
-  const original = state.activeModel;
-  for (const model of buildFallbackList()) {
+// override: pick this model transiently (e.g. cheap model for housekeeping)
+// WITHOUT mutating global state.activeModel or broadcasting a UI model switch.
+// This is concurrency-safe -- background agents streaming on the real model are
+// never disrupted by a compression/crystallization call swapping the global model.
+function pickModel(override) {
+  const original = override || state.activeModel;
+  for (const model of buildFallbackList(original)) {
     if (isModelBlocked(model)) continue;
     const prov = providerForModel(model);
     if (!prov) continue; // no key for this provider
     if (model !== original) {
       console.warn('[api:failover] Auto-switching from "' + original + '" to "' + model + '"');
-      state.activeModel = model;
-      if (_onModelSwitch) _onModelSwitch(model);
+      if (!override) {
+        state.activeModel = model;
+        if (_onModelSwitch) _onModelSwitch(model);
+      }
     }
     return { ...prov, model };
   }
@@ -184,10 +189,10 @@ async function withRetry(fn, maxAttempts = 3) {
 }
 
 // ---- Single-shot (non-streaming) ----
-export async function chat(messages) {
+export async function chat(messages, opts = {}) {
   let modelAttempts = 0;
   while (modelAttempts < 4) {
-    const { provider, base, key, model } = pickModel();
+    const { provider, base, key, model } = pickModel(opts.model);
     try {
       return await withRetry(async () => {
         if (provider === 'anthropic') {
@@ -243,16 +248,19 @@ export async function* chatStream(messages, tools) {
   let modelAttempts = 0;
   while (modelAttempts < 4) {
     const { provider, base, key, model } = pickModel();
+    let yielded = 0;
     try {
-      if (provider === 'anthropic') {
-        yield* claudeStream(messages, tools, base, key, model);
-      } else {
-        yield* openaiStream(messages, tools, base, key, model);
-      }
+      const gen = provider === 'anthropic'
+        ? claudeStream(messages, tools, base, key, model)
+        : openaiStream(messages, tools, base, key, model);
+      for await (const chunk of gen) { yielded++; yield chunk; }
       return;
     } catch (err) {
-      if (FAILOVER_TRIGGERS.has(err.status)) {
-        recordModelFailure(model);
+      // Only fail over if NOTHING was emitted yet. Once tokens have streamed to the
+      // caller, retrying a fresh stream would duplicate output and corrupt the turn --
+      // so penalize the model and re-throw instead.
+      if (FAILOVER_TRIGGERS.has(err.status)) recordModelFailure(model);
+      if (yielded === 0 && FAILOVER_TRIGGERS.has(err.status)) {
         modelAttempts++;
         console.warn('[api:failover] Stream error on "' + model + '" (' + err.status + ') -- trying next model');
         continue;

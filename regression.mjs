@@ -14,7 +14,10 @@ import { TOOLS, classifyRisk } from './athena/tools.mjs';
 import { machineTrend, loadFingerprint } from './athena/machines.mjs';
 import { watcherStatus } from './athena/watcher.mjs';
 import { getProviderStatus } from './athena/api.mjs';
-import { existsSync } from 'node:fs';
+import { runTool } from './athena/tools.mjs';
+import { existsSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 let p=0, f=0;
 function test(name, fn) {
@@ -333,6 +336,78 @@ test('athena.md exists', () => {
 });
 test('sessions dir exists', () => {
   if (!existsSync(PATHS.sessDir)) throw new Error('missing');
+});
+
+// -- POWER TOOLS (find_files / grep_files / multi_edit) ----------
+section('Power Tools');
+
+const _PT_DIR  = join(tmpdir(), 'athena_pt_' + Date.now());
+const _PT_SUB  = join(_PT_DIR, 'sub');
+mkdirSync(_PT_SUB, { recursive: true });
+const _PT_A = join(_PT_DIR, 'alpha.mjs');
+const _PT_B = join(_PT_SUB, 'beta.txt');
+writeFileSync(_PT_A, 'export const x = 1;\nfunction needle() { return 42; }\nconst y = 2;\n');
+writeFileSync(_PT_B, 'plain text\nNEEDLE here\nmore\n');
+
+const _findMjs   = await runTool('find_files', { pattern: '**/*.mjs', path: _PT_DIR }, true, [], () => {}, null);
+const _findBase  = await runTool('find_files', { pattern: '*.txt', path: _PT_DIR }, true, [], () => {}, null);
+const _grepCase  = await runTool('grep_files', { pattern: 'needle', path: _PT_DIR }, true, [], () => {}, null);
+const _grepIcase = await runTool('grep_files', { pattern: 'needle', path: _PT_DIR, ignore_case: true }, true, [], () => {}, null);
+const _grepGlob  = await runTool('grep_files', { pattern: 'e', path: _PT_DIR, glob: '*.mjs' }, true, [], () => {}, null);
+
+const _meOk = await runTool('multi_edit', { path: _PT_A, edits: [
+  { old_str: 'const x = 1;', new_str: 'const x = 100;' },
+  { old_str: 'const y = 2;', new_str: 'const y = 200;' },
+] }, true, [], () => {}, null);
+const _meContent = readFileSync(_PT_A, 'utf8');
+
+writeFileSync(_PT_A, 'AAA\nBBB\n');
+const _meFail = await runTool('multi_edit', { path: _PT_A, edits: [
+  { old_str: 'AAA', new_str: 'ZZZ' },
+  { old_str: 'NOPE', new_str: 'X' },
+] }, true, [], () => {}, null);
+const _meFailContent = readFileSync(_PT_A, 'utf8');
+
+let _meDenied = '';
+try { await runTool('multi_edit', { path: _PT_A, edits: [{ old_str: 'AAA', new_str: 'Z' }] }, false, [], () => {}, null); }
+catch (e) { _meDenied = e.message; }
+
+try { rmSync(_PT_DIR, { recursive: true, force: true }); } catch {}
+
+test('find_files matches by ** glob (recursive)', () => {
+  if (!_findMjs.includes('alpha.mjs')) throw new Error('did not find alpha.mjs: ' + _findMjs);
+});
+test('find_files matches by basename glob', () => {
+  if (!_findBase.includes('beta.txt')) throw new Error('did not find beta.txt: ' + _findBase);
+});
+test('grep_files finds case-sensitive match', () => {
+  if (!_grepCase.includes('needle')) throw new Error('no match: ' + _grepCase);
+  if (_grepCase.includes('NEEDLE')) throw new Error('case-sensitive leaked uppercase');
+});
+test('grep_files ignore_case finds both cases', () => {
+  if (!_grepIcase.includes('needle') || !_grepIcase.includes('NEEDLE')) throw new Error('icase missed one: ' + _grepIcase);
+});
+test('grep_files glob filter restricts files', () => {
+  if (_grepGlob.includes('beta.txt')) throw new Error('glob filter did not exclude .txt');
+});
+test('multi_edit applies all edits atomically', () => {
+  if (!String(_meOk).startsWith('multi_edit: applied 2')) throw new Error('bad result: ' + _meOk);
+  if (!_meContent.includes('const x = 100;') || !_meContent.includes('const y = 200;')) throw new Error('edits not applied: ' + _meContent);
+});
+test('multi_edit is atomic on failure (nothing written)', () => {
+  if (!String(_meFail).includes('not found')) throw new Error('expected failure msg: ' + _meFail);
+  if (_meFailContent !== 'AAA\nBBB\n') throw new Error('partial write leaked: ' + JSON.stringify(_meFailContent));
+});
+test('multi_edit denied without approval', () => {
+  if (_meDenied !== 'not approved') throw new Error('expected not approved, got: ' + _meDenied);
+});
+test('classifyRisk: find_files/grep_files are tier 0', () => {
+  if (classifyRisk('find_files', {}, null).tier !== 0) throw new Error('find_files not tier 0');
+  if (classifyRisk('grep_files', {}, null).tier !== 0) throw new Error('grep_files not tier 0');
+});
+test('classifyRisk: multi_edit is tier 1 (non-system) / tier 2 (system)', () => {
+  if (classifyRisk('multi_edit', { path: '/tmp/x' }, null).tier !== 1) throw new Error('multi_edit not tier 1');
+  if (classifyRisk('multi_edit', { path: '/etc/hosts' }, null).tier !== 2) throw new Error('multi_edit system not tier 2');
 });
 
 // SUMMARY

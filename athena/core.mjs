@@ -25,6 +25,16 @@ export function isActive() { return _turnActive; }
 const _noopInput = async (question) => `(background agent -- cannot ask user: ${question})`;
 
 
+// ---- Cheap-model selection for housekeeping (compression, crystallization) ----
+// Returns a model id to use transiently. Never mutates global state.activeModel --
+// the override is threaded explicitly through chat(), so concurrent background agents
+// streaming on the real model are never disrupted.
+function cheapModel() {
+  if (API_KEY)        return 'gpt-4o-mini';
+  if (ANTHROPIC_KEY)  return 'claude-haiku-4-5-20251001';
+  return state.activeModel; // offline -- local model is the only option
+}
+
 // ---- Context compression ----
 const COMPRESS_KEEP_START = 2;
 const COMPRESS_KEEP_END   = 15;
@@ -62,16 +72,13 @@ async function maybeCompress(messages, emit, currentTodos = []) {
   if (middle.length < 4) return; // not worth compressing after boundary adjustments
 
   emit({ type: 'system', text: `Compressing ${middle.length} messages (~${estimated} tokens estimated, budget ${tokenBudget})…` });
-  // Use cheapest available model for compression -- no reason to burn expensive tokens on housekeeping
-  const savedModel = state.activeModel;
-  if (API_KEY) state.activeModel = 'gpt-4o-mini';
-  else if (ANTHROPIC_KEY) state.activeModel = 'claude-haiku-4-5-20251001';
-  // else: offline mode -- local model stays active for compression
+  // Use cheapest available model for compression via an explicit override -- no global
+  // model mutation, so concurrent agents are unaffected.
   try {
     const sum = await chat([
       { role: 'system', content: 'Summarize this conversation in 10-15 bullet points. Be specific: include filenames, commands, values, decisions, problems solved, current state. No preamble.' },
       { role: 'user', content: middle.filter(m => m.role === 'user' || m.role === 'assistant').map(m => `${m.role}: ${m.content || '[tool]'}`).join('\n') },
-    ]);
+    ], { model: cheapModel() });
     const summary = { role: 'assistant', content: `[Context compressed -- ${middle.length} messages → summary]\n${sum.content || ''}` };
     const todoReinject = currentTodos.length
       ? [{ role: 'user', content: `[Task list after compression]\n${JSON.stringify(currentTodos)}` }]
@@ -79,9 +86,7 @@ async function maybeCompress(messages, emit, currentTodos = []) {
     messages.length = 0;
     messages.push(...start, summary, ...todoReinject, ...end);
     emit({ type: 'system', text: `Compressed (${middle.length} → 1). Continuing…` });
-  } catch (e) { import('./telemetry.mjs').then(({ logError }) => logError('compression', e)).catch(() => {}); } finally {
-    state.activeModel = savedModel;
-  }
+  } catch (e) { import('./telemetry.mjs').then(({ logError }) => logError('compression', e)).catch(() => {}); }
 }
 
 // ---- Core turn loop ----
@@ -365,10 +370,6 @@ export async function runTask(goal, messages, emit) {
 
 // Phase 9: crystallize helper
 export async function crystallize(goal, toolTrace, emit) {
-  const savedModel = state.activeModel;
-  if (API_KEY) state.activeModel = 'gpt-4o-mini';
-  else if (ANTHROPIC_KEY) state.activeModel = 'claude-haiku-4-5-20251001';
-  // else: offline mode -- local model stays active for crystallization
   try {
     const traceText = toolTrace.map(t =>
       t.name + '(' + Object.entries(t.args || {}).map(([k, v]) => k + '=' + JSON.stringify(v).slice(0, 60)).join(', ') + ')'
@@ -376,7 +377,7 @@ export async function crystallize(goal, toolTrace, emit) {
     const res = await chat([
       { role: 'system', content: 'You are a skill extractor for an AI agent. Analyse the tool trace and decide if it encodes a general, repeatable pattern.' },
       { role: 'user', content: 'Task goal: ' + goal + '\n\nTool call trace (' + toolTrace.length + ' calls):\n' + traceText + '\n\nIs this a repeatable pattern worth saving as a reusable skill?\nReply in this EXACT JSON format (no markdown): {"repeatable": true/false, "skillName": "kebab-case-name", "description": "one-line description", "content": "markdown skill instructions"}\nIf not repeatable, reply: {"repeatable": false}' },
-    ]);
+    ], { model: cheapModel() });
     let parsed;
     try { parsed = JSON.parse((res.content || '').trim()); } catch { return; }
     if (!parsed || !parsed.repeatable || !parsed.skillName) return;
@@ -389,9 +390,7 @@ export async function crystallize(goal, toolTrace, emit) {
       emit({ type: 'system', text: 'Crystallized: new skill "' + parsed.skillName + '" saved (unverified -- will verify on next successful use)' });
     }
     broadcastSkill(parsed.skillName, parsed.description, parsed.content, emit);
-  } catch { } finally {
-    state.activeModel = savedModel;
-  }
+  } catch { }
 }
 
 let _broadcastSkill = () => {};

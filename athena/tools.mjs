@@ -1,7 +1,7 @@
 // tools.mjs
 import { readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
-import { resolve, join, isAbsolute, delimiter } from 'node:path';
+import { resolve, join, isAbsolute, delimiter, relative, sep } from 'node:path';
 import { exec, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { BRAVE_KEY, AUTO } from './config.mjs';
@@ -41,6 +41,49 @@ function stripHtml(html) {
     .replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
 }
 
+// ---- Native filesystem search helpers (zero-dep, cross-platform) ----
+const WALK_IGNORE = new Set([
+  'node_modules', '.git', '.svn', '.hg', 'dist', 'build', '.cache',
+  '__pycache__', '.venv', 'venv', '.next', 'target', '.gradle', '.idea',
+]);
+
+// Iterative directory walk. Yields absolute file paths, skipping heavy dirs.
+async function* walkFiles(root, maxFiles = 20000) {
+  let count = 0;
+  const stack = [root];
+  while (stack.length) {
+    const dir = stack.pop();
+    let entries;
+    try { entries = await readdir(dir, { withFileTypes: true }); } catch { continue; }
+    for (const ent of entries) {
+      const full = join(dir, ent.name);
+      if (ent.isDirectory()) {
+        if (!WALK_IGNORE.has(ent.name)) stack.push(full);
+      } else if (ent.isFile()) {
+        yield full;
+        if (++count >= maxFiles) return;
+      }
+    }
+  }
+}
+
+// Minimal glob -> RegExp. Supports **, *, ?, and literal path separators.
+function globToRegExp(glob) {
+  let re = '';
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i];
+    if (c === '*') {
+      if (glob[i + 1] === '*') { re += '.*'; i++; if (glob[i + 1] === '/') i++; }
+      else re += '[^/]*';
+    } else if (c === '?') re += '[^/]';
+    else if ('.+^${}()|[]\\'.includes(c)) re += '\\' + c;
+    else re += c;
+  }
+  return new RegExp('^' + re + '$');
+}
+
+function relPosix(root, file) { return relative(root, file).split(sep).join('/'); }
+
 export const TOOLS = [
   { type: 'function', function: { name: 'run_shell', description: 'Execute a shell command on the host machine. On Windows, wrap scripts with powershell prefix. Returns stdout + stderr.', parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] } } },
   { type: 'function', function: { name: 'read_file', description: 'Read a file from disk.', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } } },
@@ -73,6 +116,9 @@ export const TOOLS = [
   { type: 'function', function: { name: 'machine_diff', description: 'Compare the current machine state against the last saved fingerprint. Shows what tools, languages, or hardware changed since the last visit.', parameters: { type: 'object', properties: {} } } },
   { type: 'function', function: { name: 'remediate', description: 'Get a guided remediation plan for a security or system issue. Returns exact commands to fix the problem. Set execute:true to apply the fix (requires approval).', parameters: { type: 'object', properties: { issue: { type: 'string', description: 'The issue to fix, e.g. "firewall not enabled", "ssh root login allowed", "pending updates"' }, execute: { type: 'boolean' } }, required: ['issue'] } } },
   { type: 'function', function: { name: 'skill_rollback', description: 'Roll back a skill to a prior version. Use list_versions:true to see available versions.', parameters: { type: 'object', properties: { name: { type: 'string' }, version: { type: 'number' }, list_versions: { type: 'boolean' } }, required: ['name'] } } },
+  { type: 'function', function: { name: 'find_files', description: 'Find files by glob pattern (e.g. "**/*.mjs", "src/*.js"). Native recursive walk, skips node_modules/.git. Returns matching paths. Far cheaper than shelling out to find.', parameters: { type: 'object', properties: { pattern: { type: 'string' }, path: { type: 'string', description: 'Root dir to search (default: cwd)' }, max: { type: 'number' } }, required: ['pattern'] } } },
+  { type: 'function', function: { name: 'grep_files', description: 'Search file contents by regex across a directory tree (native, no shell, skips binaries). Returns file:line:match. Supports a glob filter and N context lines. Use this to locate code before editing.', parameters: { type: 'object', properties: { pattern: { type: 'string' }, path: { type: 'string', description: 'Root dir or single file (default: cwd)' }, glob: { type: 'string', description: 'Only search files whose path matches this glob' }, context: { type: 'number', description: 'Lines of context around each match (0-5)' }, ignore_case: { type: 'boolean' }, max: { type: 'number' } }, required: ['pattern'] } } },
+  { type: 'function', function: { name: 'multi_edit', description: 'Apply several exact-string replacements to ONE file atomically. Each old_str must match exactly once. If any edit fails to match, nothing is written. Always read_file first.', parameters: { type: 'object', properties: { path: { type: 'string' }, edits: { type: 'array', items: { type: 'object', properties: { old_str: { type: 'string' }, new_str: { type: 'string' } }, required: ['old_str', 'new_str'] } } }, required: ['path', 'edits'] } } },
 ];
 
 // ---- Sudo lockout safety ----
@@ -172,6 +218,84 @@ export async function runTool(name, args, preApproved, sessionTodos, setSessionT
     if (count > 1)   return 'edit_file: old_str appears ' + count + ' times -- make it more unique';
     await writeFile(target, original.replace(args.old_str, () => args.new_str));
     return 'Edited ' + target;
+  }
+  if (name === 'multi_edit') {
+    if (!ok) throw new Error('not approved');
+    const target = isAbsolute(args.path) ? args.path : resolve(process.cwd(), args.path);
+    const edits = Array.isArray(args.edits) ? args.edits : [];
+    if (!edits.length) return 'multi_edit: no edits provided';
+    let content = await readFile(target, 'utf8');
+    // Validate-and-apply in memory; only write if ALL edits succeed (atomic).
+    for (let i = 0; i < edits.length; i++) {
+      const { old_str, new_str } = edits[i] || {};
+      if (old_str === undefined || new_str === undefined)
+        return 'multi_edit: edit ' + (i + 1) + ' missing old_str/new_str -- no changes written';
+      const c = content.split(old_str).length - 1;
+      if (c === 0) return 'multi_edit: edit ' + (i + 1) + ' old_str not found -- no changes written: ' + String(old_str).slice(0, 60);
+      if (c > 1)   return 'multi_edit: edit ' + (i + 1) + ' old_str matches ' + c + ' times -- make it unique. No changes written.';
+      content = content.replace(old_str, () => new_str);
+    }
+    await writeFile(target, content);
+    return 'multi_edit: applied ' + edits.length + ' edit(s) to ' + target;
+  }
+
+  if (name === 'find_files') {
+    const root = isAbsolute(args.path || '.') ? (args.path || process.cwd()) : resolve(process.cwd(), args.path || '.');
+    const rx   = globToRegExp(String(args.pattern || '*'));
+    const max  = Math.min(Number(args.max) || 200, 1000);
+    const matches = [];
+    for await (const file of walkFiles(root)) {
+      const rel  = relPosix(root, file);
+      const base = file.split(/[\\/]/).pop();
+      if (rx.test(rel) || rx.test(base)) {
+        matches.push(file);
+        if (matches.length >= max) break;
+      }
+    }
+    if (!matches.length) return 'No files match ' + args.pattern + ' under ' + root;
+    return matches.join('\n') + (matches.length >= max ? '\n[...capped at ' + max + ']' : '');
+  }
+
+  if (name === 'grep_files') {
+    const root = isAbsolute(args.path || '.') ? (args.path || process.cwd()) : resolve(process.cwd(), args.path || '.');
+    let rx;
+    try { rx = new RegExp(args.pattern, args.ignore_case ? 'i' : ''); }
+    catch (e) { return 'grep_files: invalid regex -- ' + e.message; }
+    const globRx     = args.glob ? globToRegExp(args.glob) : null;
+    const ctx        = Math.min(Math.max(Number(args.context) || 0, 0), 5);
+    const maxMatches = Math.min(Number(args.max) || 100, 500);
+
+    const rootStat = await stat(root).catch(() => null);
+    const files = [];
+    if (rootStat?.isFile()) files.push(root);
+    else {
+      for await (const f of walkFiles(root)) {
+        if (!globRx || globRx.test(relPosix(root, f)) || globRx.test(f.split(/[\\/]/).pop())) files.push(f);
+      }
+    }
+
+    const out = [];
+    let total = 0;
+    for (const file of files) {
+      if (total >= maxMatches) break;
+      let content;
+      try { content = await readFile(file, 'utf8'); } catch { continue; }
+      if (content.indexOf('\u0000') !== -1) continue; // skip binary
+      const lines = content.split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        if (!rx.test(lines[i])) continue;
+        if (ctx > 0) {
+          for (let j = Math.max(0, i - ctx); j <= Math.min(lines.length - 1, i + ctx); j++)
+            out.push(file + ':' + (j + 1) + (j === i ? ':' : '-') + lines[j]);
+          out.push('--');
+        } else {
+          out.push(file + ':' + (i + 1) + ':' + lines[i]);
+        }
+        if (++total >= maxMatches) break;
+      }
+    }
+    if (!out.length) return 'No matches for /' + args.pattern + '/ under ' + root;
+    return out.join('\n') + (total >= maxMatches ? '\n[...capped at ' + maxMatches + ' matches]' : '');
   }
 
   if (name === 'fetch_url') {
@@ -410,6 +534,7 @@ export function classifyRisk(name, args, machineProfile) {
     'generate_report', 'audit_replay', 'machine_diff', 'machine_health_trend',
     'workspace_read', 'spawn_agent', 'save_skill', 'update_skill',
     'query_machine_logs', 'diff_machine_state', 'skill_rollback',
+    'find_files', 'grep_files',
   ]);
   if (safe.has(name)) return { tier: 0, reason: 'read-only or informational' };
 
@@ -443,7 +568,7 @@ export function classifyRisk(name, args, machineProfile) {
     return { tier: 1, reason: 'file write -- recoverable' };
   }
 
-  if (name === 'edit_file') {
+  if (name === 'edit_file' || name === 'multi_edit') {
     const path = (args && args.path || '').replace(/\\/g, '/').toLowerCase();
     if (/^\/(etc|usr|bin|sbin|boot)|^[a-z]:\/windows/i.test(path))
       return { tier: 2, reason: 'edit of system file' };
@@ -459,4 +584,4 @@ export function classifyRisk(name, args, machineProfile) {
   return { tier: 1, reason: 'unclassified tool -- treating as low-impact' };
 }
 
-export const DESTRUCTIVE = new Set(['run_shell', 'write_file', 'edit_file', 'remediate']);
+export const DESTRUCTIVE = new Set(['run_shell', 'write_file', 'edit_file', 'multi_edit', 'remediate']);
