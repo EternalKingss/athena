@@ -6,7 +6,7 @@ Athena is a portable AI agent and debugging companion. It runs as a local server
 
 - **Persistent state** — memory, instincts, skills, CORAL learning, alerts, audit log, and provider health are stored in SQLite and survive restarts
 - **Authenticated, resumable UI** — token-authenticated WebSocket transport with a byte-bounded replay buffer, so the UI can reconnect and catch up on missed events
-- **Provider failover** — routes between cloud LLM providers and a vendored local llama-server, with automatic fallback and offline model selection
+- **Provider failover** — routes between OpenAI, Anthropic, and a vendored local llama-server, with automatic fallback and offline model selection
 - **Safe tool execution** — every tool call passes through a deterministic, fail-closed risk engine, Tier 2 approval gates, per-tool output caps, and audit logging; built-in handlers cover workspace-scoped file access, search, hashing, stack traces, memory recall, and shell commands
 - **Offline command surface** — `/tool`, `/risk`, and `/recall` work without a model or network connection
 - **Memory & learning** — persistent memory and instincts, CORAL turn-boundary learning, watchers that correlate related events, and summarize-not-drop compression
@@ -25,6 +25,23 @@ pnpm verify
 ```
 
 `pnpm verify` runs lint, typecheck, tests, build, and an artifact check. Build output lands in `v4/dist/` (`server.js`, `cli.js`, `ui/`).
+
+## Configuration
+
+All configuration is via environment variables; everything is optional and Athena falls back to offline mode with no keys set.
+
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `ATHENA_OPENAI_KEY` / `OPENAI_API_KEY` | OpenAI-compatible API key (first match wins) | — |
+| `ATHENA_OPENAI_MODEL` | OpenAI model name | `gpt-4o-mini` |
+| `ANTHROPIC_API_KEY` | Anthropic API key | — |
+| `ATHENA_ANTHROPIC_MODEL` | Anthropic model name | `claude-haiku-4-5-20251001` |
+| `ATHENA_LLAMA_URL` | Base URL of a vendored/local llama-server, added as the final failover provider | — |
+| `ATHENA_WORKSPACE` | Workspace root for file/search/shell tools | cwd |
+| `ATHENA_OFFLINE` | Set to `1` to force offline mode even if API keys are present | unset |
+| `ATHENA_V4_PORT` | Server port | `48991` |
+
+Provider failover order is OpenAI → Anthropic → vendored llama-server, skipping any that aren't configured. With nothing configured, `ask` and the UI fall back to the deterministic offline command surface.
 
 ## Usage
 

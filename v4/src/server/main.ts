@@ -3,6 +3,7 @@ import { totalmem } from "node:os";
 import { runBootSelfCheck } from "./kernel/bootSelfCheck.js";
 import { createCompositionRoot } from "./kernel/compositionRoot.js";
 import { offlineMode, selectLocalModel } from "./offline/localModel.js";
+import { buildCloudProviders } from "./providers/cloudProviders.js";
 import { attachWebSocketTransport, isAllowedHost } from "./transport/webSocket.js";
 
 const HOST = "127.0.0.1";
@@ -19,6 +20,7 @@ export async function startServer(options: ServerOptions = {}) {
   const llamaBaseUrl = process.env.ATHENA_LLAMA_URL;
   const workspaceRoot = process.env.ATHENA_WORKSPACE;
   const root = createCompositionRoot({
+    providers: buildCloudProviders(),
     ...(options.token === undefined ? {} : { token: options.token }),
     ...(options.dbPath === undefined ? {} : { dbPath: options.dbPath }),
     ...(llamaBaseUrl === undefined ? {} : { llamaBaseUrl }),
