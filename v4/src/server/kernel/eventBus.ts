@@ -31,6 +31,10 @@ export class EventBus {
     return this.#ring.filter((event) => event.seq > since);
   }
 
+  get replayBytes(): number {
+    return this.#ringBytes;
+  }
+
   subscribe(subscriber: EventSubscriber): () => void {
     this.#subscribers.add(subscriber);
     return () => this.#subscribers.delete(subscriber);

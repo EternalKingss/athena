@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
-import { randomBytes, timingSafeEqual } from "node:crypto";
-import { EventBus } from "./kernel/eventBus.js";
 import { runBootSelfCheck } from "./kernel/bootSelfCheck.js";
+import { createCompositionRoot } from "./kernel/compositionRoot.js";
+import { attachWebSocketTransport, isAllowedHost } from "./transport/webSocket.js";
 
 const HOST = "127.0.0.1";
 const DEFAULT_PORT = 48991;
@@ -9,15 +9,20 @@ const DEFAULT_PORT = 48991;
 export type ServerOptions = {
   port?: number;
   token?: string;
+  dbPath?: string;
 };
 
 export async function startServer(options: ServerOptions = {}) {
-  const port = options.port ?? Number(process.env.ATHENA_V4_PORT ?? DEFAULT_PORT);
-  const token = options.token ?? randomBytes(32).toString("hex");
-  const bus = new EventBus();
+  let port = options.port ?? Number(process.env.ATHENA_V4_PORT ?? DEFAULT_PORT);
+  const root = createCompositionRoot({
+    ...(options.token === undefined ? {} : { token: options.token }),
+    ...(options.dbPath === undefined ? {} : { dbPath: options.dbPath }),
+  });
+  const { bus, token } = root;
 
   bus.emit({ type: "boot_started", version: "0.0.0" });
   const selfCheck = await runBootSelfCheck();
+  await root.db.ping();
 
   bus.emit({
     type: "capability_changed",
@@ -36,46 +41,38 @@ export async function startServer(options: ServerOptions = {}) {
   const server = createServer((req, res) => {
     const host = req.headers.host ?? "";
     if (!isAllowedHost(host, port)) {
+      const audit = auditRow("http_request", "denied", "host_not_allowed", req.socket.remoteAddress);
+      bus.emit({ type: "security_audit", ...audit });
+      void root.db.writeSecurityAudit(audit);
       res.writeHead(403).end("forbidden");
-      return;
-    }
-
-    const url = new URL(req.url ?? "/", `http://${host}`);
-    if (!isTokenValid(url.searchParams.get("token"), token)) {
-      res.writeHead(403).end("forbidden");
-      return;
-    }
-
-    if (url.pathname === "/events") {
-      const since = parseSince(url.searchParams.get("since"));
-      res.setHeader("content-type", "application/json; charset=utf-8");
-      res.end(JSON.stringify(bus.replay(since)));
       return;
     }
 
     res.setHeader("content-type", "application/json; charset=utf-8");
-    res.end(JSON.stringify({ ok: true, events: "/events?token=<session>&since=<seq>" }));
+    res.end(JSON.stringify({ ok: true, ws: "/ws?token=<session>&since=<seq>" }));
   });
+  const transport = attachWebSocketTransport(server, { bus, db: root.db, token, getPort: () => port });
 
   await new Promise<void>((resolve) => server.listen(port, HOST, resolve));
-  return { server, bus, token, url: `http://${HOST}:${port}/?token=${token}` };
+  const address = server.address();
+  if (typeof address === "object" && address) port = address.port;
+  const close = async () => {
+    transport.close();
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+    await root.close();
+  };
+  return { server, bus, token, url: `http://${HOST}:${port}/?token=${token}`, close };
 }
 
-function isAllowedHost(host: string, port: number): boolean {
-  return host === `127.0.0.1:${port}` || host === `localhost:${port}`;
-}
-
-function isTokenValid(candidate: string | null, token: string): boolean {
-  if (!candidate) return false;
-  const left = Buffer.from(candidate, "hex");
-  const right = Buffer.from(token, "hex");
-  return left.length === right.length && timingSafeEqual(left, right);
-}
-
-function parseSince(value: string | null): number | undefined {
-  if (value === null) return undefined;
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined;
+function auditRow(action: "http_request", outcome: "denied", reason: string, remoteAddress: string | undefined) {
+  return {
+    action,
+    outcome,
+    reason,
+    ...(remoteAddress === undefined ? {} : { remoteAddress }),
+  };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

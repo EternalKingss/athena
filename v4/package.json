@@ -16,7 +16,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "lint": "node scripts/lint.mjs",
-    "verify": "pnpm run lint && pnpm run typecheck && pnpm run test && pnpm run build"
+    "verify:artifact": "node scripts/verify-artifact.mjs",
+    "verify": "pnpm run lint && pnpm run typecheck && pnpm run test && pnpm run build && pnpm run verify:artifact"
   },
   "dependencies": {},
   "devDependencies": {

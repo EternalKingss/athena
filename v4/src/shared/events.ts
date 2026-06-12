@@ -19,6 +19,14 @@ export type ProviderState = {
   blockedUntil?: string;
 };
 
+export type SecurityAuditEvent = SequencedEvent<{
+  type: "security_audit";
+  action: "ws_connect" | "http_request";
+  outcome: "allowed" | "denied";
+  reason: string;
+  remoteAddress?: string;
+}>;
+
 export type CapabilityName =
   | "sqlite"
   | "sqlite_fts5"
@@ -51,6 +59,7 @@ export type ServerEvent =
   | SequencedEvent<{ type: "failover"; from: ProviderState; to: ProviderState; reason: string }>
   | SequencedEvent<{ type: "storage_mode"; mode: StorageMode; reason?: string }>
   | SequencedEvent<{ type: "error_detail"; error: AthenaError }>
+  | SecurityAuditEvent
   | CapabilityChangedEvent;
 
 export type ClientEvent =
