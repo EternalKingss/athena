@@ -1,10 +1,8 @@
 # Athena v4
 
-This directory is the full redesign track for Athena. The old v3 runtime has been removed; preserved behavior now lives in `SEMANTICS.md` and its regression tests.
+This directory contains Athena's implementation — server, CLI, and UI. See the [root README](../README.md) for what Athena does and how to run it.
 
-## Current state
-
-The subsystems are now wired into a running, durable runtime (not just isolated modules):
+## What's here
 
 - strict TypeScript package boundary; shared event contract in `src/shared/events.ts`
 - server, CLI, and Svelte UI entrypoints
@@ -17,14 +15,6 @@ The subsystems are now wired into a running, durable runtime (not just isolated 
 - eight-view Svelte shell; CI verification on Ubuntu, Windows, and macOS
 - 46 regression tests including a restart-survival integration test and a live over-the-wire turn
 
-The remaining work is operational, not architectural: vendor the per-arch Node + llama-server + model artifacts on the drive and pin their real SHA-256 values in `vendor/manifest.json`, run migration against live v3 data, build out the remaining tool handlers and the agentic LLM tool-call loop, deepen the UI surfaces, and validate from the shipped runtime on the physical drive.
-
-## Design stance
-
-v4 may use TypeScript, Svelte, Vite, esbuild, pnpm, and bundled pure JS/TS packages. That is intentional. The old v3 rules about zero npm dependencies and `.mjs`-only source do not apply inside `v4/`.
-
-The shipping artifact still must not contain `node_modules`. Build output, vendored runtimes, vendored native binaries, models, and verified wasm assets are the deployable surface.
-
 ## Commands
 
 ```bash
@@ -35,8 +25,7 @@ pnpm verify
 
 Package versions are pinned in `package.json` and resolved in `pnpm-lock.yaml`.
 
-## Authority
+## Reference
 
-- `CLAUDE.md` defines v4 engineering rules.
-- `SEMANTICS.md` defines preserved v3 behavior and must stay test-mapped.
-- The external blueprint remains human-owned and must not be regenerated wholesale.
+- `CLAUDE.md` — engineering rules for this codebase
+- `SEMANTICS.md` — preserved behavior and its regression tests

@@ -31,6 +31,20 @@
       "path": "vendor/models/bge-small-en-v1.5/model.onnx",
       "sha256": "TO_BE_PINNED_BY_SETUP",
       "required": false
+    },
+    {
+      "name": "llama-server",
+      "platform": "win-x64",
+      "path": "vendor/bin/llama/llama-server.exe",
+      "sha256": "130ac1062e86cc01043f509adf466bc44bafb96860f3ff49a4e746994f6c2da1",
+      "required": false
+    },
+    {
+      "name": "qwen2.5-coder-7b-instruct-q4_k_m",
+      "platform": "all",
+      "path": "vendor/models/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf",
+      "sha256": "1664fccab734674a50763490a8c6931b70e3f2f8ec10031b54806d30e5f956b6",
+      "required": false
     }
   ]
 }

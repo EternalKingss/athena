@@ -14,6 +14,11 @@ v4/vendor/bindings/
 # Local state
 v4/data/
 config/.env
+# Secrets — never commit any .env anywhere
+.env
+*.env
+**/.env
+!*.env.example
 *.db
 *.db-wal
 *.db-shm
