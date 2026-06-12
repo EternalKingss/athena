@@ -4,20 +4,20 @@ This directory is the full redesign track for Athena. The old v3 runtime has bee
 
 ## Current state
 
-This tree now carries the v4 implementation surface for the full rebuild plan:
+The subsystems are now wired into a running, durable runtime (not just isolated modules):
 
-- strict TypeScript package boundary
-- shared event contract in `src/shared/events.ts`
+- strict TypeScript package boundary; shared event contract in `src/shared/events.ts`
 - server, CLI, and Svelte UI entrypoints
-- authenticated WebSocket replay with a 4MB byte-bounded ring
-- composition root, DB worker, schema bootstrap, and storage capability events
-- provider failover router and L2 turn engine
-- deterministic risk engine, approval leases, and typed tool registry
-- memory, instincts, machine fingerprints, migration planning, skills, CORAL, watchers, compression, debug helpers, offline model selection, and runtime manifest verification
-- eight-view Svelte shell for Chat, Approvals, Memory, Skills, Agents, Watchers, Sessions, and System
-- CI verification on Ubuntu, Windows, and macOS
+- authenticated WebSocket replay with a 4MB byte-bounded ring, cross-chunk frame reassembly, and guarded client-frame parsing
+- composition root that instantiates every subsystem, hydrates it from SQLite on `init()`, and exposes a write-through services facade
+- `storage/repository.ts`: typed persistence for memory, instincts(+events), skills(+versions), coral, alerts(+events), audit, errors, and provider health — state survives restart
+- provider failover router (+ optional vendored llama-server adapter) and a turn engine with an offline command surface (`/tool`, `/risk`, `/recall`)
+- `tools/executor.ts`: real tool execution through the full security pipeline — risk tier → Tier 2 approval gate → per-tool output cap → audit row + lifecycle events (workspace-scoped file, search, hash, stacktrace, recall, and shell handlers)
+- deterministic risk engine (fail-closed quote handling), approval leases, memory, instincts, fingerprints, migration planning, skills, CORAL, watchers (related-only correlation), compression (summarize-not-drop), debug helpers, offline model selection, runtime manifest verification
+- eight-view Svelte shell; CI verification on Ubuntu, Windows, and macOS
+- 46 regression tests including a restart-survival integration test and a live over-the-wire turn
 
-The remaining cutover work is operational rather than architectural: pin real vendored artifact SHA-256 values, run migration against live v3 data, and validate from the shipped runtime on the physical drive.
+The remaining work is operational, not architectural: vendor the per-arch Node + llama-server + model artifacts on the drive and pin their real SHA-256 values in `vendor/manifest.json`, run migration against live v3 data, build out the remaining tool handlers and the agentic LLM tool-call loop, deepen the UI surfaces, and validate from the shipped runtime on the physical drive.
 
 ## Design stance
 

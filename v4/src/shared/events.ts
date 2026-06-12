@@ -83,6 +83,7 @@ export type ServerEvent =
 export type ClientEvent =
   | { type: "chat_submit"; text: string }
   | { type: "approval_response"; id: string; approved: boolean; forSession?: boolean }
+  | { type: "set_auto_approve"; enabled: boolean }
   | { type: "stop_turn"; reason?: string }
   | { type: "ping" };
 

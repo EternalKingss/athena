@@ -20,6 +20,22 @@ export class InstinctTracker {
   #instincts = new Map<string, Instinct>();
   #events: InstinctEvent[] = [];
 
+  /** Seed persisted instincts on boot, keyed the same way observe() keys them. */
+  hydrate(instincts: Instinct[]): void {
+    for (const instinct of instincts) {
+      const key = `${instinct.domain}:${instinct.body}:${instinct.machineId ?? "global"}`;
+      this.#instincts.set(key, { ...instinct, seenSessions: new Set(instinct.seenSessions) });
+    }
+  }
+
+  snapshot(): Instinct[] {
+    return [...this.#instincts.values()].map((instinct) => ({ ...instinct, seenSessions: new Set(instinct.seenSessions) }));
+  }
+
+  lastEvent(): InstinctEvent | undefined {
+    return this.#events.at(-1);
+  }
+
   observe(domain: string, body: string, sessionId: string, confidenceDelta: number, machineId?: string): Instinct | undefined {
     const key = `${domain}:${body}:${machineId ?? "global"}`;
     const existing = this.#instincts.get(key) ?? {
@@ -34,7 +50,9 @@ export class InstinctTracker {
     existing.confidence = clamp(existing.confidence + confidenceDelta);
     this.#instincts.set(key, existing);
 
-    if (existing.confidence < 40 && existing.seenSessions.size >= 3) {
+    // SEMANTICS: stale instincts retire below confidence 40. Require it to have been
+    // seen more than once so a single weak observation is not retired on creation.
+    if (existing.confidence < 40 && existing.seenSessions.size >= 2) {
       this.#events.push(event(existing.id, "retired", existing.confidence));
       return existing;
     }

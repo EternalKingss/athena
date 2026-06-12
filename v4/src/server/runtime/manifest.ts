@@ -9,7 +9,7 @@ export type VendorArtifact = {
 };
 
 export type VendorManifest = {
-  node: { version: string; moduleVersion: 127 };
+  node: { version: string; moduleVersion: number };
   artifacts: VendorArtifact[];
 };
 

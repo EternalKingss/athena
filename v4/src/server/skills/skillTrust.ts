@@ -18,6 +18,17 @@ export type SkillVersion = {
 export class SkillRegistry {
   #skills = new Map<string, Skill>();
 
+  /** Seed persisted skills (and their versions) on boot. */
+  hydrate(skills: Skill[]): void {
+    for (const skill of skills) {
+      this.#skills.set(skill.name, { ...skill, versions: skill.versions.map((version) => ({ ...version })) });
+    }
+  }
+
+  snapshot(): Skill[] {
+    return [...this.#skills.values()].map((skill) => ({ ...skill, versions: skill.versions.map((version) => ({ ...version })) }));
+  }
+
   saveUnverified(name: string, body: string): Skill {
     const skill = this.#skills.get(name) ?? { id: randomUUID(), name, verified: false, versions: [] };
     const best = skill.versions.at(-1);
@@ -50,5 +61,5 @@ export class SkillRegistry {
 }
 
 export function shouldCrystallize(toolCalls: string[]): boolean {
-  return toolCalls.filter((tool) => tool !== "load_skill").length >= 4;
+  return toolCalls.filter((tool) => tool !== "load_skill" && tool !== "skill_load").length >= 4;
 }

@@ -11,6 +11,15 @@ export type ProviderKey = {
 export class ProviderHealth {
   #states = new Map<string, ProviderState>();
 
+  /** Seed persisted health (including active blocks) on boot. */
+  hydrate(states: ProviderState[]): void {
+    for (const state of states) this.#states.set(this.#key(state), { ...state });
+  }
+
+  snapshot(): ProviderState[] {
+    return [...this.#states.values()];
+  }
+
   recordSuccess(key: ProviderKey): ProviderState {
     const state: ProviderState = { ...key, failureCount: 0 };
     this.#states.set(this.#key(key), state);
@@ -19,7 +28,8 @@ export class ProviderHealth {
 
   recordFailure(key: ProviderKey, status: number, now = new Date()): ProviderState {
     const previous = this.get(key);
-    const failureCount = BLOCKING_STATUS.has(status) ? previous.failureCount + 1 : previous.failureCount;
+    // "Two *consecutive* blocking errors" — a non-blocking failure breaks the streak.
+    const failureCount = BLOCKING_STATUS.has(status) ? previous.failureCount + 1 : 0;
     const blockedUntil = failureCount >= 2 ? new Date(now.getTime() + BLOCK_MS).toISOString() : undefined;
     const state: ProviderState = {
       ...key,
