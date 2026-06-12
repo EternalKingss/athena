@@ -9,7 +9,11 @@ on:
 jobs:
   v4-verify:
     name: v4 verify
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
 
     steps:
       - name: Checkout
@@ -25,7 +29,7 @@ jobs:
 
       - name: Install dependencies
         working-directory: v4
-        run: pnpm install --no-frozen-lockfile
+        run: pnpm install --frozen-lockfile
 
       - name: Verify
         working-directory: v4
