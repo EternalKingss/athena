@@ -1,6 +1,6 @@
 # Athena v4
 
-This directory is the full redesign track for Athena. The existing root `athena/` tree remains the v3 reference implementation until the Phase 8 cutover.
+This directory is the full redesign track for Athena. The old v3 runtime has been removed; preserved behavior now lives in `SEMANTICS.md` and its regression tests.
 
 ## Current state
 
@@ -30,7 +30,7 @@ pnpm install --no-frozen-lockfile
 pnpm verify
 ```
 
-A committed `pnpm-lock.yaml` should be generated in the next toolchain-hardening pass once package versions are pinned.
+Package versions are pinned in `package.json` and resolved in `pnpm-lock.yaml`.
 
 ## Authority
 

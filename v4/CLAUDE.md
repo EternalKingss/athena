@@ -1,6 +1,6 @@
 # Athena v4 Project Brief
 
-Athena v4 is a full redesign, built beside the v3 tree. The v3 code remains read-only reference until the cutover phase. Do not apply v3 implementation rules to v4 unless this file or SEMANTICS.md explicitly says to preserve behavior.
+Athena v4 is a full redesign. The v3 runtime has been removed from this repository, so preserved behavior is carried by `SEMANTICS.md` and tests rather than by keeping a second implementation beside the rebuild.
 
 ## Mission
 
@@ -28,7 +28,7 @@ Athena is a portable AI debugging companion that lives on a 1TB external SSD. Sh
 
 ## Build boundaries
 
-The v4 tree owns its own tooling and conventions. The root v3 files are not a style guide for v4.
+The v4 tree owns its own tooling and conventions. Removed v3 files are not a style guide for v4.
 
 - Use TypeScript source under `v4/src/`.
 - Put shared contracts in `v4/src/shared/` first.

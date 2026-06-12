@@ -20,12 +20,12 @@
   },
   "dependencies": {},
   "devDependencies": {
-    "@sveltejs/vite-plugin-svelte": "latest",
-    "@types/node": "latest",
-    "esbuild": "latest",
-    "svelte": "latest",
-    "typescript": "latest",
-    "vite": "latest",
-    "vitest": "latest"
+    "@sveltejs/vite-plugin-svelte": "7.1.2",
+    "@types/node": "25.9.3",
+    "esbuild": "0.28.1",
+    "svelte": "5.56.3",
+    "typescript": "6.0.3",
+    "vite": "8.0.16",
+    "vitest": "4.1.8"
   }
 }

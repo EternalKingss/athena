@@ -2,7 +2,9 @@
 
 Athena v4 is a full redesign, not a patch series on v3.
 
-The v3 runtime remains in the root `athena/` tree as the behavior reference. The new implementation starts in `v4/` with its own TypeScript, Svelte, SQLite, WebSocket, offline-model, and vendored-runtime architecture.
+The v3 runtime has been removed from this repository. The new implementation starts in `v4/` with its own TypeScript, Svelte, SQLite, WebSocket, offline-model, and vendored-runtime architecture.
+
+Preserved behavior is tracked as explicit semantics in `v4/SEMANTICS.md`, not by keeping the old runtime around as a second implementation.
 
 ## What changes
 

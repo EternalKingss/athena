@@ -7,77 +7,8 @@ on:
     branches: [main]
 
 jobs:
-  v3-regression:
-    name: v3 regression tests
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Create minimal .env for tests
-        run: |
-          mkdir -p config
-          cat > config/.env << 'EOF'
-          OPENAI_API_KEY=test-key
-          OPENAI_MODEL=gpt-4o
-          OPENAI_BASE_URL=https://api.openai.com/v1
-          AUTO_APPROVE=false
-          AGENT_NAME=Athena
-          EOF
-
-      - name: Run regression suite
-        run: node regression.mjs
-
-  v3-lint:
-    name: v3 lint guards
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Check for em dashes in source files
-        run: |
-          echo "Checking for em dashes (U+2014) in .mjs files..."
-          if grep -rn $'\u2014' athena/ regression.mjs 2>/dev/null; then
-            echo "ERROR: Em dashes found in source files. Use -- instead."
-            exit 1
-          fi
-          echo "OK -- no em dashes found"
-
-      - name: Check for CommonJS syntax
-        run: |
-          echo "Checking for CommonJS require() in .mjs files..."
-          if grep -rn "require(" athena/*.mjs 2>/dev/null; then
-            echo "ERROR: CommonJS require() found. Use ES module import instead."
-            exit 1
-          fi
-          echo "OK -- no CommonJS found"
-
-      - name: Verify root package has no dependencies
-        run: |
-          if [ -f package.json ]; then
-            deps=$(node -e "const p=require('./package.json'); const d=Object.keys({...p.dependencies,...p.devDependencies}); console.log(d.length)")
-            if [ "$deps" -gt "0" ]; then
-              echo "ERROR: root package.json has external dependencies. v3 must stay zero npm deps."
-              exit 1
-            fi
-          fi
-          echo "OK -- v3 has no npm dependencies"
-
   v4-verify:
-    name: v4 scaffold verify
+    name: v4 verify
     runs-on: ubuntu-latest
 
     steps:
@@ -92,10 +23,10 @@ jobs:
       - name: Install pnpm
         run: npm install --global pnpm@9.15.4
 
-      - name: Install v4 dependencies
+      - name: Install dependencies
         working-directory: v4
         run: pnpm install --no-frozen-lockfile
 
-      - name: Verify v4 scaffold
+      - name: Verify
         working-directory: v4
         run: pnpm verify
