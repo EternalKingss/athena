@@ -94,7 +94,32 @@ export function createCompositionRoot(options: CompositionRootOptions = {}): Com
   });
 
   const workspaceRoot = options.workspaceRoot ?? process.cwd();
-  const executor = new ToolExecutor({ bus, tools, approvals, memory, recordAudit: (record) => repo.appendAudit(record) });
+
+  const writeMemoryThrough = async (body: string): Promise<MemoryWriteResult> => {
+    const result = memory.write(body);
+    await repo.upsertMemory(result.entry);
+    bus.emit({ type: "memory_updated", id: result.entry.id, action: result.action });
+    return result;
+  };
+  const transitionAlertThrough = async (id: string, state: AlertState): Promise<Alert> => {
+    const alert = watchers.transition(id, state);
+    await repo.saveAlert(alert);
+    await repo.appendAlertEvent(alert.id, state);
+    bus.emit({ type: "alert_event", alertId: alert.id, monitor: alert.monitor, state, severity: alert.severity });
+    return alert;
+  };
+
+  const executor = new ToolExecutor({
+    bus,
+    tools,
+    approvals,
+    memory,
+    providerHealth,
+    skills,
+    recordAudit: (record) => repo.appendAudit(record),
+    writeMemory: writeMemoryThrough,
+    ackAlert: (id) => transitionAlertThrough(id, "acked"),
+  });
   const turnEngine = new TurnEngine(bus, {
     router,
     executor,
@@ -102,12 +127,7 @@ export function createCompositionRoot(options: CompositionRootOptions = {}): Com
   });
 
   const services: Services = {
-    writeMemory: async (body) => {
-      const result = memory.write(body);
-      await repo.upsertMemory(result.entry);
-      bus.emit({ type: "memory_updated", id: result.entry.id, action: result.action });
-      return result;
-    },
+    writeMemory: writeMemoryThrough,
     observeInstinct: async (domain, body, sessionId, delta, machineId) => {
       const outcome = instincts.observe(domain, body, sessionId, delta, machineId);
       const event = instincts.lastEvent();
@@ -132,13 +152,7 @@ export function createCompositionRoot(options: CompositionRootOptions = {}): Com
       bus.emit({ type: "alert_event", alertId: alert.id, monitor, state: alert.state, severity });
       return alert;
     },
-    transitionAlert: async (id, state) => {
-      const alert = watchers.transition(id, state);
-      await repo.saveAlert(alert);
-      await repo.appendAlertEvent(alert.id, state);
-      bus.emit({ type: "alert_event", alertId: alert.id, monitor: alert.monitor, state, severity: alert.severity });
-      return alert;
-    },
+    transitionAlert: transitionAlertThrough,
     recordAudit: async (record) => {
       await repo.appendAudit(record);
     },
