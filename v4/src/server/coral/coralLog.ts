@@ -8,8 +8,14 @@ export class CoralLog {
   #entries: CoralEntry[] = [];
   #pending: CoralEntry[] = [];
 
+  /** Seed already-persisted (committed) CORAL entries on boot. */
+  hydrate(entries: CoralEntry[]): void {
+    this.#entries = entries.map((entry) => ({ ...entry }));
+  }
+
   append(platform: string, body: string): CoralEntry {
-    const entry = { version: this.#entries.length + this.#pending.length + 1, platform, body };
+    const nextVersion = Math.max(0, ...this.#entries.map((entry) => entry.version), ...this.#pending.map((entry) => entry.version)) + 1;
+    const entry = { version: nextVersion, platform, body };
     this.#pending.push(entry);
     return entry;
   }

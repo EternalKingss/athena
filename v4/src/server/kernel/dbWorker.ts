@@ -1,18 +1,18 @@
 import { Worker } from "node:worker_threads";
 import { ATHENA_FTS_SQL, ATHENA_SCHEMA_SQL } from "../storage/schema.js";
 
-export type DbWorkerMessage =
-  | { id: number; type: "ping" }
-  | {
-      id: number;
-      type: "writeSecurityAudit";
-      row: { action: string; outcome: string; reason: string; remoteAddress?: string };
-    }
-  | { id: number; type: "close" };
+export type SqlParam = string | number | bigint | null | Uint8Array;
+
+export type RunResult = { changes: number; lastInsertRowid: number };
+
+export type SecurityAuditRow = { action: string; outcome: string; reason: string; remoteAddress?: string };
 
 type DbWorkerRequest =
   | { type: "ping" }
-  | { type: "writeSecurityAudit"; row: { action: string; outcome: string; reason: string; remoteAddress?: string } }
+  | { type: "writeSecurityAudit"; row: SecurityAuditRow }
+  | { type: "run"; sql: string; params: SqlParam[] }
+  | { type: "get"; sql: string; params: SqlParam[] }
+  | { type: "all"; sql: string; params: SqlParam[] }
   | { type: "close" };
 
 export type DbWorkerOptions = {
@@ -45,8 +45,20 @@ export class DbWorker {
     return this.#request<{ ok: true }>({ type: "ping" });
   }
 
-  writeSecurityAudit(row: { action: string; outcome: string; reason: string; remoteAddress?: string }): Promise<void> {
+  writeSecurityAudit(row: SecurityAuditRow): Promise<void> {
     return this.#request({ type: "writeSecurityAudit", row }).then(() => undefined);
+  }
+
+  run(sql: string, params: SqlParam[] = []): Promise<RunResult> {
+    return this.#request<RunResult>({ type: "run", sql, params });
+  }
+
+  get<T>(sql: string, params: SqlParam[] = []): Promise<T | undefined> {
+    return this.#request<T | null>({ type: "get", sql, params }).then((value) => value ?? undefined);
+  }
+
+  all<T>(sql: string, params: SqlParam[] = []): Promise<T[]> {
+    return this.#request<T[]>({ type: "all", sql, params });
   }
 
   async close(): Promise<void> {
@@ -56,10 +68,9 @@ export class DbWorker {
 
   #request<T = unknown>(message: DbWorkerRequest): Promise<T> {
     const id = this.#nextId++;
-    const payload = { ...message, id } as DbWorkerMessage;
     return new Promise((resolve, reject) => {
       this.#pending.set(id, { resolve: resolve as (value: unknown) => void, reject });
-      this.#worker.postMessage(payload);
+      this.#worker.postMessage({ ...message, id });
     });
   }
 
@@ -100,6 +111,8 @@ async function open() {
   }
   const sqlite = await import("node:sqlite");
   db = new sqlite.DatabaseSync(workerData.dbPath);
+  db.exec("PRAGMA journal_mode = WAL");
+  db.exec("PRAGMA foreign_keys = ON");
   db.exec(workerData.schemaSql);
   try {
     db.exec(workerData.ftsSql);
@@ -112,13 +125,12 @@ async function open() {
 
 parentPort.on("message", async (message) => {
   try {
+    const database = await open();
     if (message.type === "ping") {
-      await open();
       parentPort.postMessage({ id: message.id, ok: true, value: { ok: true } });
       return;
     }
     if (message.type === "writeSecurityAudit") {
-      const database = await open();
       database.prepare("INSERT INTO security_audit (ts, action, outcome, reason, remote_address) VALUES (?, ?, ?, ?, ?)").run(
         new Date().toISOString(),
         message.row.action,
@@ -129,12 +141,28 @@ parentPort.on("message", async (message) => {
       parentPort.postMessage({ id: message.id, ok: true });
       return;
     }
+    if (message.type === "run") {
+      const info = database.prepare(message.sql).run(...(message.params ?? []));
+      parentPort.postMessage({ id: message.id, ok: true, value: { changes: Number(info.changes), lastInsertRowid: Number(info.lastInsertRowid) } });
+      return;
+    }
+    if (message.type === "get") {
+      const row = database.prepare(message.sql).get(...(message.params ?? []));
+      parentPort.postMessage({ id: message.id, ok: true, value: row ?? null });
+      return;
+    }
+    if (message.type === "all") {
+      const rows = database.prepare(message.sql).all(...(message.params ?? []));
+      parentPort.postMessage({ id: message.id, ok: true, value: rows });
+      return;
+    }
     if (message.type === "close") {
       if (db) db.close();
+      db = undefined;
       parentPort.postMessage({ id: message.id, ok: true });
       return;
     }
-    throw new Error("Unknown DB worker message");
+    throw new Error("Unknown DB worker message: " + message.type);
   } catch (error) {
     parentPort.postMessage({ id: message.id, ok: false, error: error instanceof Error ? error.message : String(error) });
   }

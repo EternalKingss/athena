@@ -1,7 +1,6 @@
 import { createServer } from "node:http";
 import { runBootSelfCheck } from "./kernel/bootSelfCheck.js";
 import { createCompositionRoot } from "./kernel/compositionRoot.js";
-import { TurnEngine } from "./turns/turnEngine.js";
 import { attachWebSocketTransport, isAllowedHost } from "./transport/webSocket.js";
 
 const HOST = "127.0.0.1";
@@ -23,7 +22,7 @@ export async function startServer(options: ServerOptions = {}) {
 
   bus.emit({ type: "boot_started", version: "0.0.0" });
   const selfCheck = await runBootSelfCheck();
-  await root.db.ping();
+  await root.init();
 
   bus.emit({
     type: "capability_changed",
@@ -38,7 +37,6 @@ export async function startServer(options: ServerOptions = {}) {
     ...(selfCheck.fts5Available ? {} : { reason: "FTS5 probe failed" }),
   });
   bus.emit({ type: "boot_ready" });
-  const turnEngine = new TurnEngine(bus);
 
   const server = createServer((req, res) => {
     const host = req.headers.host ?? "";
@@ -59,7 +57,7 @@ export async function startServer(options: ServerOptions = {}) {
     token,
     getPort: () => port,
     onClientEvent: async (event) => {
-      if (event.type === "chat_submit") await turnEngine.run(event.text, "ui");
+      if (event.type === "chat_submit") await root.turnEngine.run(event.text, "ui");
     },
   });
 
