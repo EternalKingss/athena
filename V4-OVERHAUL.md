@@ -24,16 +24,17 @@ That includes tiered autonomy, skill trust gates, CORAL turn-boundary learning, 
 
 ## Current branch target
 
-The first v4 branch establishes the P0 foundation:
+The active v4 branch consolidates the remaining rebuild plan into one full PR:
 
-- `v4/CLAUDE.md`
-- `v4/SEMANTICS.md`
-- `v4/package.json`
-- strict TypeScript config
-- shared event contract
-- server/CLI/UI entrypoints
-- byte-bounded event replay buffer
-- Node 22.13 sqlite/FTS5 self-check
-- v4 CI verification track
+- P0 artifact gate and three-OS CI
+- P1A authenticated WebSocket replay and loopback auth
+- P1B provider failover and turn engine
+- P2 deterministic risk, approvals, leases, tool registry, output caps, and ratchet corpus
+- P3 memory, instincts, fingerprints, schema, migration planning, and offline recall fallback
+- P4 skills, crystallization gate, and CORAL turn-boundary persistence
+- P5 watcher FSM, offline mode, and local model selection
+- P6 debug helper surface and pty fallback capability event
+- P7 eight-view Svelte UI shell
+- P8 runtime manifest, setup scripts, artifact boot verifier, and cutover notes
 
-This is the foundation for the rebuild. It is not yet the cutover runtime.
+The only intentionally unresolved items are the human-owned operational decisions from the blueprint: real vendored artifact hashes, live v3 migration data, portable Python/Loki/search-key/env-key posture, and final validation from the physical drive runtime.

@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 import { runBootSelfCheck } from "./kernel/bootSelfCheck.js";
 import { createCompositionRoot } from "./kernel/compositionRoot.js";
+import { TurnEngine } from "./turns/turnEngine.js";
 import { attachWebSocketTransport, isAllowedHost } from "./transport/webSocket.js";
 
 const HOST = "127.0.0.1";
@@ -37,6 +38,7 @@ export async function startServer(options: ServerOptions = {}) {
     ...(selfCheck.fts5Available ? {} : { reason: "FTS5 probe failed" }),
   });
   bus.emit({ type: "boot_ready" });
+  const turnEngine = new TurnEngine(bus);
 
   const server = createServer((req, res) => {
     const host = req.headers.host ?? "";
@@ -51,7 +53,15 @@ export async function startServer(options: ServerOptions = {}) {
     res.setHeader("content-type", "application/json; charset=utf-8");
     res.end(JSON.stringify({ ok: true, ws: "/ws?token=<session>&since=<seq>" }));
   });
-  const transport = attachWebSocketTransport(server, { bus, db: root.db, token, getPort: () => port });
+  const transport = attachWebSocketTransport(server, {
+    bus,
+    db: root.db,
+    token,
+    getPort: () => port,
+    onClientEvent: async (event) => {
+      if (event.type === "chat_submit") await turnEngine.run(event.text, "ui");
+    },
+  });
 
   await new Promise<void>((resolve) => server.listen(port, HOST, resolve));
   const address = server.address();

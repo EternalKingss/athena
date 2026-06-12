@@ -48,14 +48,34 @@ describe("secure WebSocket transport", () => {
     expect(started.bus.replay(undefined).some((event) => event.type === "security_audit" && event.outcome === "denied" && event.reason === "token_invalid")).toBe(true);
     await destroySocket(socket);
   });
+
+  it("rejects hostile Host and Origin headers", async () => {
+    const started = await startServer({ port: 0, token: "e".repeat(64), dbPath: ":memory:" });
+    servers.push(started);
+    const port = new URL(started.url).port;
+
+    const hostSocket = connect(Number(port), "127.0.0.1");
+    await once(hostSocket, "connect");
+    hostSocket.write(handshake({ port, token: started.token, host: "evil.example" }));
+    const [hostChunk] = (await once(hostSocket, "data")) as [Buffer];
+    expect(hostChunk.toString("utf8")).toContain("403 Forbidden");
+    await destroySocket(hostSocket);
+
+    const originSocket = connect(Number(port), "127.0.0.1");
+    await once(originSocket, "connect");
+    originSocket.write(handshake({ port, token: started.token, origin: "http://evil.example" }));
+    const [originChunk] = (await once(originSocket, "data")) as [Buffer];
+    expect(originChunk.toString("utf8")).toContain("403 Forbidden");
+    await destroySocket(originSocket);
+  });
 });
 
-function handshake(options: { port: string; token: string; since?: number }): string {
+function handshake(options: { port: string; token: string; since?: number; host?: string; origin?: string }): string {
   const since = options.since === undefined ? "" : `&since=${options.since}`;
   return [
     `GET /ws?token=${options.token}${since} HTTP/1.1`,
-    `Host: 127.0.0.1:${options.port}`,
-    `Origin: http://127.0.0.1:${options.port}`,
+    `Host: ${options.host ?? `127.0.0.1:${options.port}`}`,
+    `Origin: ${options.origin ?? `http://127.0.0.1:${options.port}`}`,
     "Connection: Upgrade",
     "Upgrade: websocket",
     "Sec-WebSocket-Version: 13",

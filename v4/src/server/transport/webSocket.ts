@@ -1,7 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, Server } from "node:http";
 import type { Duplex } from "node:stream";
-import type { EventSeq, ServerEvent } from "../../shared/events.js";
+import type { ClientEvent, EventSeq, ServerEvent } from "../../shared/events.js";
 import type { DbWorker } from "../kernel/dbWorker.js";
 import type { EventBus } from "../kernel/eventBus.js";
 
@@ -12,6 +12,7 @@ export type WebSocketTransportOptions = {
   db: DbWorker;
   token: string;
   getPort: () => number;
+  onClientEvent?: (event: ClientEvent) => void | Promise<void>;
 };
 
 export type WebSocketTransport = {
@@ -100,6 +101,9 @@ async function handleUpgrade(req: IncomingMessage, socket: Duplex, options: WebS
         socket.end(encodeFrame(Buffer.alloc(0), 0x8));
       } else if (frame.opcode === 0x9) {
         socket.write(encodeFrame(frame.payload, 0xa));
+      } else if (frame.opcode === 0x1 && options.onClientEvent) {
+        const parsed = JSON.parse(frame.payload.toString("utf8")) as ClientEvent;
+        void options.onClientEvent(parsed);
       }
     }
   });
