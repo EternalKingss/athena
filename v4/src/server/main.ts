@@ -75,7 +75,7 @@ function auditRow(action: "http_request", outcome: "denied", reason: string, rem
   };
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1]?.endsWith("server.js")) {
   const started = await startServer();
   console.log(started.url);
 }

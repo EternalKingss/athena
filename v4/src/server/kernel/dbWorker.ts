@@ -88,10 +88,15 @@ function isWorkerReply(message: unknown): message is { id: number; ok: true; val
 
 const WORKER_SOURCE = `
 const { parentPort, workerData } = require("node:worker_threads");
+const { mkdirSync } = require("node:fs");
+const { dirname } = require("node:path");
 let db;
 
 async function open() {
   if (db) return db;
+  if (workerData.dbPath !== ":memory:") {
+    mkdirSync(dirname(workerData.dbPath), { recursive: true });
+  }
   const sqlite = await import("node:sqlite");
   db = new sqlite.DatabaseSync(workerData.dbPath);
   db.exec("CREATE TABLE IF NOT EXISTS security_audit (id INTEGER PRIMARY KEY, ts TEXT NOT NULL, action TEXT NOT NULL, outcome TEXT NOT NULL, reason TEXT NOT NULL, remote_address TEXT)");

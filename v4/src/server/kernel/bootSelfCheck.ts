@@ -17,14 +17,21 @@ export async function runBootSelfCheck(): Promise<BootSelfCheckResult> {
 
     const db = new sqlite.DatabaseSync(":memory:");
     try {
-      const row = db.prepare("SELECT fts5(?1) AS ok").get("athena") as { ok?: unknown } | undefined;
-      result.fts5Available = row?.ok !== undefined;
+      db.exec("CREATE VIRTUAL TABLE athena_fts_probe USING fts5(body)");
+      db.prepare("INSERT INTO athena_fts_probe (body) VALUES (?)").run("athena");
+      const row = db.prepare("SELECT rowid FROM athena_fts_probe WHERE athena_fts_probe MATCH ?").get("athena");
+      result.fts5Available = row !== undefined;
     } finally {
       db.close();
     }
   } catch {
+    if (result.sqliteAvailable) {
+      result.fts5Available = false;
+      return result;
+    }
     result.sqliteAvailable = false;
     result.fts5Available = false;
+    return result;
   }
 
   return result;
