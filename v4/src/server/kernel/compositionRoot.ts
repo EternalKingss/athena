@@ -12,6 +12,7 @@ import { classifyCommand } from "../risk/riskEngine.js";
 import { SkillRegistry } from "../skills/skillTrust.js";
 import { Repository, type AuditRecord } from "../storage/repository.js";
 import { ToolRegistry } from "../tools/registry.js";
+import { ToolExecutor } from "../tools/executor.js";
 import { TurnEngine } from "../turns/turnEngine.js";
 import { WatcherEngine, type Alert, type MonitorName } from "../watchers/watcherEngine.js";
 import { EventBus } from "./eventBus.js";
@@ -47,6 +48,7 @@ export type CompositionRoot = {
   providerHealth: ProviderHealth;
   approvals: ApprovalManager;
   tools: ToolRegistry;
+  executor: ToolExecutor;
   errors: ErrorHub;
   risk: typeof classifyCommand;
   router: StreamingRouter;
@@ -130,6 +132,8 @@ export function createCompositionRoot(options: CompositionRootOptions = {}): Com
     },
   };
 
+  const executor = new ToolExecutor({ bus, tools, approvals, memory, recordAudit: services.recordAudit });
+
   return {
     bus,
     db,
@@ -143,6 +147,7 @@ export function createCompositionRoot(options: CompositionRootOptions = {}): Com
     providerHealth,
     approvals,
     tools,
+    executor,
     errors,
     risk: classifyCommand,
     router,
