@@ -61,5 +61,5 @@ export class SkillRegistry {
 }
 
 export function shouldCrystallize(toolCalls: string[]): boolean {
-  return toolCalls.filter((tool) => tool !== "load_skill").length >= 4;
+  return toolCalls.filter((tool) => tool !== "load_skill" && tool !== "skill_load").length >= 4;
 }

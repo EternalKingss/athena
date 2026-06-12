@@ -14,6 +14,7 @@ import { SkillRegistry } from "../skills/skillTrust.js";
 import { Repository, type AuditRecord } from "../storage/repository.js";
 import { ToolRegistry } from "../tools/registry.js";
 import { ToolExecutor } from "../tools/executor.js";
+import { AgentLoop } from "../turns/agentLoop.js";
 import { TurnEngine } from "../turns/turnEngine.js";
 import { WatcherEngine, type Alert, type MonitorName } from "../watchers/watcherEngine.js";
 import { EventBus } from "./eventBus.js";
@@ -120,9 +121,11 @@ export function createCompositionRoot(options: CompositionRootOptions = {}): Com
     writeMemory: writeMemoryThrough,
     ackAlert: (id) => transitionAlertThrough(id, "acked"),
   });
+  const agent = new AgentLoop({ bus, router, executor });
   const turnEngine = new TurnEngine(bus, {
     router,
     executor,
+    agent,
     getExecutionContext: (source) => ({ workspaceRoot, actor: source === "background" ? "background" : "interactive", autoApprove: false }),
   });
 

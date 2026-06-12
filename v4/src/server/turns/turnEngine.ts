@@ -4,12 +4,14 @@ import type { EventBus } from "../kernel/eventBus.js";
 import type { StreamingRouter } from "../providers/router.js";
 import { classifyCommand } from "../risk/riskEngine.js";
 import type { ExecutionContext, ToolExecutor, ToolInput } from "../tools/executor.js";
+import type { AgentLoop } from "./agentLoop.js";
 
 export type TurnSource = "cli" | "ui" | "background";
 
 export type TurnEngineOptions = {
   router?: StreamingRouter;
   executor?: ToolExecutor;
+  agent?: AgentLoop;
   getExecutionContext?: (source: TurnSource) => ExecutionContext;
 };
 
@@ -46,6 +48,13 @@ export class TurnEngine {
       this.bus.emit({ type: "text_delta", id, text: l2.text });
       this.bus.emit({ type: "turn_finished", id, ok: true });
       return l2.text;
+    }
+
+    if (this.options.agent) {
+      const result = await this.options.agent.run(text, this.#context(source));
+      if (result.text.length > 0) this.bus.emit({ type: "text_delta", id, text: result.text });
+      this.bus.emit({ type: "turn_finished", id, ok: result.text.length > 0 });
+      return result.text;
     }
 
     let output = "";
