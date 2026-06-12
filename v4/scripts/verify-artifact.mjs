@@ -20,8 +20,15 @@ try {
     env: { ...process.env, NODE_PATH: "" },
   });
   const selfCheck = JSON.parse(doctor.stdout);
-  if (selfCheck.sqliteAvailable !== true || selfCheck.fts5Available !== true) {
-    throw new Error(`Artifact sqlite/FTS5 self-check failed: ${doctor.stdout}`);
+  if (selfCheck.sqliteAvailable !== true) {
+    throw new Error(`Artifact sqlite self-check failed: ${doctor.stdout}`);
+  }
+  if (selfCheck.fts5Available !== true) {
+    const message = `Artifact FTS5 self-check failed under Node ${selfCheck.nodeVersion}`;
+    if (process.env.ATHENA_REQUIRE_FTS5 === "1") {
+      throw new Error(`${message}: ${doctor.stdout}`);
+    }
+    console.warn(`${message}; continuing until v4 pins and vendors its own Node runtime.`);
   }
 
   const serverModule = await import(pathToFileURL(path.join(sandbox, "dist", "server.js")).href);
