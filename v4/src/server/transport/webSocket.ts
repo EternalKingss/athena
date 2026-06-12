@@ -2,10 +2,12 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, Server } from "node:http";
 import type { Duplex } from "node:stream";
 import type { ClientEvent, EventSeq, ServerEvent } from "../../shared/events.js";
+import { athenaError } from "../../shared/errors.js";
 import type { DbWorker } from "../kernel/dbWorker.js";
 import type { EventBus } from "../kernel/eventBus.js";
 
 const WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+const MAX_INBOUND_BYTES = 1024 * 1024;
 
 export type WebSocketTransportOptions = {
   bus: EventBus;
@@ -94,19 +96,48 @@ async function handleUpgrade(req: IncomingMessage, socket: Duplex, options: WebS
   };
   socket.on("close", cleanup);
   socket.on("error", cleanup);
+
+  // TCP can split or coalesce frames, so accumulate and only consume whole frames.
+  let inbound = Buffer.alloc(0);
   socket.on("data", (chunk: Buffer) => {
-    for (const frame of readClientFrames(chunk)) {
+    inbound = inbound.length === 0 ? Buffer.from(chunk) : Buffer.concat([inbound, chunk]);
+    const { frames, consumed } = readClientFrames(inbound);
+    inbound = consumed >= inbound.length ? Buffer.alloc(0) : Buffer.from(inbound.subarray(consumed));
+    if (inbound.length > MAX_INBOUND_BYTES) {
+      socket.destroy();
+      return;
+    }
+    for (const frame of frames) {
       if (frame.opcode === 0x8) {
         unsubscribe();
         socket.end(encodeFrame(Buffer.alloc(0), 0x8));
       } else if (frame.opcode === 0x9) {
         socket.write(encodeFrame(frame.payload, 0xa));
       } else if (frame.opcode === 0x1 && options.onClientEvent) {
-        const parsed = JSON.parse(frame.payload.toString("utf8")) as ClientEvent;
-        void options.onClientEvent(parsed);
+        const parsed = parseClientEvent(frame.payload);
+        if (parsed === undefined) {
+          options.bus.emit({ type: "error_detail", error: athenaError("transport.bad_frame", "transport", "warning", "Unparseable client frame ignored") });
+          continue;
+        }
+        void Promise.resolve(options.onClientEvent(parsed)).catch((error: unknown) => {
+          options.bus.emit({
+            type: "error_detail",
+            error: athenaError("transport.client_event_failed", "transport", "error", error instanceof Error ? error.message : String(error)),
+          });
+        });
       }
     }
   });
+}
+
+function parseClientEvent(payload: Buffer): ClientEvent | undefined {
+  try {
+    const parsed = JSON.parse(payload.toString("utf8")) as unknown;
+    if (typeof parsed === "object" && parsed !== null && "type" in parsed) return parsed as ClientEvent;
+    return undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function isAllowedHost(host: string, port: number): boolean {
@@ -155,26 +186,40 @@ function encodeFrame(payload: Buffer, opcode: number): Buffer {
   return frame;
 }
 
-function readClientFrames(chunk: Buffer): Array<{ opcode: number; payload: Buffer }> {
+function readClientFrames(chunk: Buffer): { frames: Array<{ opcode: number; payload: Buffer }>; consumed: number } {
   const frames: Array<{ opcode: number; payload: Buffer }> = [];
   let offset = 0;
   while (offset + 2 <= chunk.length) {
+    const frameStart = offset;
     const opcode = chunk[offset]! & 0x0f;
     const masked = (chunk[offset + 1]! & 0x80) !== 0;
     let length = chunk[offset + 1]! & 0x7f;
     offset += 2;
     if (length === 126) {
-      if (offset + 2 > chunk.length) break;
+      if (offset + 2 > chunk.length) {
+        offset = frameStart;
+        break;
+      }
       length = chunk.readUInt16BE(offset);
       offset += 2;
     } else if (length === 127) {
-      if (offset + 8 > chunk.length) break;
+      if (offset + 8 > chunk.length) {
+        offset = frameStart;
+        break;
+      }
       const wideLength = chunk.readBigUInt64BE(offset);
-      if (wideLength > BigInt(Number.MAX_SAFE_INTEGER)) break;
+      if (wideLength > BigInt(Number.MAX_SAFE_INTEGER)) {
+        offset = frameStart;
+        break;
+      }
       length = Number(wideLength);
       offset += 8;
     }
-    if (!masked || offset + 4 + length > chunk.length) break;
+    // Client frames must be masked; an incomplete frame waits for the next chunk.
+    if (!masked || offset + 4 + length > chunk.length) {
+      offset = frameStart;
+      break;
+    }
     const mask = chunk.subarray(offset, offset + 4);
     offset += 4;
     const payload = Buffer.alloc(length);
@@ -184,7 +229,7 @@ function readClientFrames(chunk: Buffer): Array<{ opcode: number; payload: Buffe
     offset += length;
     frames.push({ opcode, payload });
   }
-  return frames;
+  return { frames, consumed: offset };
 }
 
 export function decodeServerTextFrames(chunk: Buffer): ServerEvent[] {

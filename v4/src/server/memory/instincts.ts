@@ -34,7 +34,9 @@ export class InstinctTracker {
     existing.confidence = clamp(existing.confidence + confidenceDelta);
     this.#instincts.set(key, existing);
 
-    if (existing.confidence < 40 && existing.seenSessions.size >= 3) {
+    // SEMANTICS: stale instincts retire below confidence 40. Require it to have been
+    // seen more than once so a single weak observation is not retired on creation.
+    if (existing.confidence < 40 && existing.seenSessions.size >= 2) {
       this.#events.push(event(existing.id, "retired", existing.confidence));
       return existing;
     }

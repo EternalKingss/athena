@@ -39,10 +39,28 @@ export const MONITORS: MonitorSpec[] = [
   { name: "pending_reboot", intervalMinutes: 60 },
 ];
 
+// SEMANTICS: only *related* alerts inside the 5-minute window merge. Relatedness is
+// defined by correlation group; unrelated alerts (e.g. a disk warning and a failed
+// login) stay distinct events.
+const CORRELATION_GROUPS: MonitorName[][] = [
+  ["cpu_spike", "ram_pressure", "temp_high", "disk_low", "battery_drain"],
+  ["kp41", "pending_reboot"],
+  ["net_change"],
+  ["login_failures"],
+];
+
+const MERGE_WINDOW_MS = 5 * 60 * 1000;
+const ACTIVE_STATES = new Set<AlertState>(["created", "shown"]);
+
 export class WatcherEngine {
   #alerts: Alert[] = [];
   #queued: Alert[] = [];
   #inTurn = false;
+
+  /** Seed persisted alerts on boot. */
+  hydrate(alerts: Alert[]): void {
+    this.#alerts = alerts.map((alert) => ({ ...alert, related: [...alert.related] }));
+  }
 
   beginTurn(): void {
     this.#inTurn = true;
@@ -56,7 +74,14 @@ export class WatcherEngine {
   }
 
   raise(monitor: MonitorName, severity: AlertSeverity, now = new Date()): Alert {
-    const existing = this.#alerts.find((alert) => now.getTime() - Date.parse(alert.createdAt) <= 5 * 60 * 1000);
+    const candidates = [...this.#alerts, ...this.#queued];
+    const existing = candidates.find(
+      (alert) =>
+        ACTIVE_STATES.has(alert.state) &&
+        now.getTime() - Date.parse(alert.createdAt) <= MERGE_WINDOW_MS &&
+        alertRelatesTo(alert, monitor),
+    );
+
     const alert: Alert =
       existing === undefined
         ? { id: randomUUID(), monitor, severity, state: "created", createdAt: now.toISOString(), related: [] }
@@ -66,10 +91,11 @@ export class WatcherEngine {
             severity: severityRank(severity) > severityRank(existing.severity) ? severity : existing.severity,
           };
 
-    if (this.#inTurn) {
-      this.#queued.push(alert);
-    } else if (existing === undefined) {
-      this.#alerts.push(alert);
+    if (existing === undefined) {
+      if (this.#inTurn) this.#queued.push(alert);
+      else this.#alerts.push(alert);
+    } else if (this.#queued.some((candidate) => candidate.id === existing.id)) {
+      this.#queued = this.#queued.map((candidate) => (candidate.id === existing.id ? alert : candidate));
     } else {
       this.#alerts = this.#alerts.map((candidate) => (candidate.id === existing.id ? alert : candidate));
     }
@@ -77,7 +103,7 @@ export class WatcherEngine {
   }
 
   transition(id: string, state: AlertState): Alert {
-    const alert = this.#alerts.find((candidate) => candidate.id === id);
+    const alert = [...this.#alerts, ...this.#queued].find((candidate) => candidate.id === id);
     if (!alert) throw new Error(`Unknown alert: ${id}`);
     alert.state = state;
     return alert;
@@ -94,4 +120,13 @@ export class WatcherEngine {
 
 function severityRank(severity: AlertSeverity): number {
   return severity === "critical" ? 3 : severity === "high" ? 2 : 1;
+}
+
+function areRelated(left: MonitorName, right: MonitorName): boolean {
+  if (left === right) return true;
+  return CORRELATION_GROUPS.some((group) => group.includes(left) && group.includes(right));
+}
+
+function alertRelatesTo(alert: Alert, monitor: MonitorName): boolean {
+  return areRelated(alert.monitor, monitor) || alert.related.some((related) => areRelated(related, monitor));
 }

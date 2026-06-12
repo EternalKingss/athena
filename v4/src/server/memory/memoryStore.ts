@@ -13,9 +13,24 @@ export type MemoryWriteResult =
   | { action: "merged"; entry: MemoryEntry }
   | { action: "flagged"; entry: MemoryEntry; conflict: MemoryEntry };
 
+export type Embedder = {
+  available: () => boolean;
+  embed: (text: string) => number[];
+};
+
 export class MemoryStore {
   #entries: MemoryEntry[] = [];
   #prohibited: RegExp[] = [];
+  #embedder: Embedder | undefined;
+
+  constructor(embedder?: Embedder) {
+    this.#embedder = embedder;
+  }
+
+  /** Seed persisted entries on boot without re-running write-time filters/merges. */
+  hydrate(entries: MemoryEntry[]): void {
+    this.#entries = entries.map((entry) => ({ ...entry }));
+  }
 
   addProhibitedPattern(pattern: string): void {
     this.#prohibited.push(new RegExp(pattern, "i"));
@@ -57,7 +72,24 @@ export class MemoryStore {
     return { action: "inserted", entry };
   }
 
+  /**
+   * Hybrid recall (SEMANTICS): vector similarity first, BM25 keyword fallback when
+   * embeddings are unavailable. Age decay down-weights ranking but never deletes.
+   */
   recall(query: string, now = new Date()): MemoryEntry[] {
+    if (this.#embedder?.available()) {
+      const queryVector = this.#embedder.embed(query);
+      const ranked = [...this.#entries]
+        .map((entry) => ({
+          entry,
+          score: cosine(queryVector, this.#embedder!.embed(entry.body)) * decay(entry.updatedAt, now),
+        }))
+        .filter((row) => row.score > 0)
+        .sort((left, right) => right.score - left.score)
+        .map((row) => row.entry);
+      if (ranked.length > 0) return ranked;
+    }
+
     const queryTokens = tokens(query);
     return [...this.#entries]
       .map((entry) => ({
@@ -84,6 +116,22 @@ export function jaccard(left: string, right: string): number {
 
 function tokens(text: string): string[] {
   return text.toLowerCase().match(/[a-z0-9_]+/g) ?? [];
+}
+
+function cosine(left: number[], right: number[]): number {
+  const length = Math.min(left.length, right.length);
+  let dot = 0;
+  let leftMag = 0;
+  let rightMag = 0;
+  for (let index = 0; index < length; index += 1) {
+    const a = left[index] ?? 0;
+    const b = right[index] ?? 0;
+    dot += a * b;
+    leftMag += a * a;
+    rightMag += b * b;
+  }
+  if (leftMag === 0 || rightMag === 0) return 0;
+  return dot / (Math.sqrt(leftMag) * Math.sqrt(rightMag));
 }
 
 function bm25ish(queryTokens: string[], bodyTokens: string[]): number {
