@@ -89,8 +89,8 @@ jobs:
         with:
           node-version: '22.13.0'
 
-      - name: Enable pnpm
-        run: corepack enable
+      - name: Install pnpm
+        run: npm install --global pnpm@9.15.4
 
       - name: Install v4 dependencies
         working-directory: v4
