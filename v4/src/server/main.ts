@@ -1,6 +1,8 @@
 import { createServer } from "node:http";
+import { totalmem } from "node:os";
 import { runBootSelfCheck } from "./kernel/bootSelfCheck.js";
 import { createCompositionRoot } from "./kernel/compositionRoot.js";
+import { offlineMode, selectLocalModel } from "./offline/localModel.js";
 import { attachWebSocketTransport, isAllowedHost } from "./transport/webSocket.js";
 
 const HOST = "127.0.0.1";
@@ -14,9 +16,13 @@ export type ServerOptions = {
 
 export async function startServer(options: ServerOptions = {}) {
   let port = options.port ?? Number(process.env.ATHENA_V4_PORT ?? DEFAULT_PORT);
+  const llamaBaseUrl = process.env.ATHENA_LLAMA_URL;
+  const workspaceRoot = process.env.ATHENA_WORKSPACE;
   const root = createCompositionRoot({
     ...(options.token === undefined ? {} : { token: options.token }),
     ...(options.dbPath === undefined ? {} : { dbPath: options.dbPath }),
+    ...(llamaBaseUrl === undefined ? {} : { llamaBaseUrl }),
+    ...(workspaceRoot === undefined ? {} : { workspaceRoot }),
   });
   const { bus, token } = root;
 
@@ -36,6 +42,19 @@ export async function startServer(options: ServerOptions = {}) {
     available: selfCheck.fts5Available,
     ...(selfCheck.fts5Available ? {} : { reason: "FTS5 probe failed" }),
   });
+  const hasApiKeys = Boolean(process.env.ATHENA_OPENAI_KEY ?? process.env.OPENAI_API_KEY ?? process.env.ANTHROPIC_API_KEY);
+  const hasNetwork = process.env.ATHENA_OFFLINE !== "1";
+  const mode = offlineMode(hasNetwork, hasApiKeys);
+  bus.emit({ type: "mode_changed", mode, reason: mode === "offline" ? "no network or no API keys" : "cloud providers configured" });
+
+  const localChoice = selectLocalModel(Math.max(1, Math.round(totalmem() / 1024 ** 3)));
+  bus.emit({
+    type: "capability_changed",
+    capability: "local_llm",
+    available: llamaBaseUrl !== undefined,
+    ...(llamaBaseUrl === undefined ? { reason: `set ATHENA_LLAMA_URL to a vendored llama-server (suggested model ${localChoice.id})` } : {}),
+  });
+
   bus.emit({ type: "boot_ready" });
 
   const server = createServer((req, res) => {

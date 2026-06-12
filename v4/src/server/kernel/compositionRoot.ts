@@ -8,6 +8,7 @@ import { InstinctTracker, type Instinct } from "../memory/instincts.js";
 import { MemoryStore, type Embedder, type MemoryWriteResult } from "../memory/memoryStore.js";
 import { ProviderHealth } from "../providers/providerHealth.js";
 import { StreamingRouter, type ChatProvider } from "../providers/router.js";
+import { createLlamaProvider } from "../offline/llamaProvider.js";
 import { classifyCommand } from "../risk/riskEngine.js";
 import { SkillRegistry } from "../skills/skillTrust.js";
 import { Repository, type AuditRecord } from "../storage/repository.js";
@@ -24,6 +25,8 @@ export type CompositionRootOptions = {
   dbPath?: string;
   providers?: ChatProvider[];
   embedder?: Embedder;
+  workspaceRoot?: string;
+  llamaBaseUrl?: string;
 };
 
 export type Services = {
@@ -80,14 +83,23 @@ export function createCompositionRoot(options: CompositionRootOptions = {}): Com
   };
   const errors = new ErrorHub(bus, errorSink);
 
-  const router = new StreamingRouter(options.providers ?? [], providerHealth, {
+  const providers = [...(options.providers ?? [])];
+  if (options.llamaBaseUrl !== undefined) providers.push(createLlamaProvider({ baseUrl: options.llamaBaseUrl }));
+  const router = new StreamingRouter(providers, providerHealth, {
     onHealthChange: (state) => {
       void repo.saveProviderHealth(state).catch((cause: unknown) => {
         errors.swallow(athenaError("storage.provider_health_failed", "storage", "warning", cause instanceof Error ? cause.message : String(cause)));
       });
     },
   });
-  const turnEngine = new TurnEngine(bus, { router });
+
+  const workspaceRoot = options.workspaceRoot ?? process.cwd();
+  const executor = new ToolExecutor({ bus, tools, approvals, memory, recordAudit: (record) => repo.appendAudit(record) });
+  const turnEngine = new TurnEngine(bus, {
+    router,
+    executor,
+    getExecutionContext: (source) => ({ workspaceRoot, actor: source === "background" ? "background" : "interactive", autoApprove: false }),
+  });
 
   const services: Services = {
     writeMemory: async (body) => {
@@ -131,8 +143,6 @@ export function createCompositionRoot(options: CompositionRootOptions = {}): Com
       await repo.appendAudit(record);
     },
   };
-
-  const executor = new ToolExecutor({ bus, tools, approvals, memory, recordAudit: services.recordAudit });
 
   return {
     bus,
