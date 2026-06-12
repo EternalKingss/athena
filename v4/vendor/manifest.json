@@ -1,14 +1,14 @@
 {
   "node": {
-    "version": "22.13.0",
-    "moduleVersion": 127
+    "version": "24.16.0",
+    "moduleVersion": 137
   },
   "artifacts": [
     {
       "name": "node-runtime",
       "platform": "win-x64",
       "path": "runtime/win-x64/node/node.exe",
-      "sha256": "TO_BE_PINNED_BY_SETUP",
+      "sha256": "b3094d0b49f9ad602262a9921551737bb97637c05dd357a06ae98188d7290aa3",
       "required": true
     },
     {
