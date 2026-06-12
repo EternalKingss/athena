@@ -1,28 +1,27 @@
-# API keys — never commit
-config/.env
+# Dependencies and build output
+node_modules/
+v4/node_modules/
+v4/dist/
+v4/.svelte-kit/
+v4/.vite/
+v4/coverage/
 
-# Personal memory & sessions
-data/memory/user.md
-data/memory/summary.md
-data/memory/*.db
-data/memory/*.bak.*
-data/memory/embeddings.jsonl
-data/memory/machines/
-data/sessions/*.jsonl
-data/sessions/audit/
+# Portable runtime and vendored large artifacts
+v4/runtime/
+v4/vendor/models/
+v4/vendor/bindings/
+
+# Local state
+v4/data/
+config/.env
+*.db
+*.db-wal
+*.db-shm
 
 # Logs and temp
-debug.log
 *.log
 *.bak
-
-# Node.js runtime binaries (~120MB each, download separately)
-runtime/linux-x64/
-runtime/linux-arm64/
-runtime/win-x64/
-runtime/win-arm64/
-runtime/mac-x64/
-runtime/mac-arm64/
+debug.log
 
 # OS noise
 .DS_Store

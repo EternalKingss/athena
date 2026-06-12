@@ -1,0 +1,31 @@
+{
+  "name": "athena-v4",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "packageManager": "pnpm@9.15.4",
+  "scripts": {
+    "build": "pnpm run build:server && pnpm run build:cli && pnpm run build:ui",
+    "build:server": "esbuild src/server/main.ts --bundle --platform=node --format=esm --target=node22.13 --outfile=dist/server.js --external:@huggingface/transformers --external:onnxruntime-web",
+    "build:cli": "esbuild src/cli/main.ts --bundle --platform=node --format=esm --target=node22.13 --outfile=dist/cli.js --external:@huggingface/transformers --external:onnxruntime-web",
+    "build:ui": "vite build",
+    "dev:ui": "vite --host 127.0.0.1",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "node scripts/lint.mjs",
+    "verify": "pnpm run lint && pnpm run typecheck && pnpm run test && pnpm run build"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "7.1.2",
+    "@types/node": "25.9.3",
+    "esbuild": "0.28.1",
+    "svelte": "5.56.3",
+    "typescript": "6.0.3",
+    "vite": "8.0.16",
+    "vitest": "4.1.8"
+  }
+}

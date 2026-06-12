@@ -1,37 +1,36 @@
 # Security Policy
 
-## What runs locally
-Athena runs entirely on your machine. The agent runtime, browser UI, skill system, and all persistent data
-stay on your device. No telemetry, no analytics, no data leaves your machine except the prompts you
-explicitly send to the LLM provider you configure (OpenAI, Anthropic, etc.).
+Athena v4 is under active rebuild. Security-sensitive behavior is specified in `v4/SEMANTICS.md` and should be implemented with tests before it is considered complete.
 
-## What does leave your machine
-- Prompts and context sent to your configured LLM API (OpenAI / Anthropic)
-- Web search queries if you use the `web_search` tool
-- Nothing else
+## Security Model
 
-## API keys
-Your API keys live in `config/.env` and are never committed to version control (`.gitignore` excludes it).
-Never share your `.env` file or paste API keys in public issues.
+Athena is a portable local agent. The v4 design assumes every host machine is a guest environment and keeps Athena's persistent state on her own drive.
 
-## Reporting a vulnerability
-If you find a security issue, please **do not open a public GitHub issue**.
+Required properties:
+
+- local server binds only to loopback
+- every client must present a per-boot session token
+- Host and Origin checks protect against DNS rebinding and browser cross-origin drive-by access
+- risk classification is deterministic and fails closed
+- Tier 2 actions require explicit approval
+- unverified skills require a trust-chain gate
+- background agents cannot pass Tier 2 gates
+- provider failover and errors are visible, not silent
+- raw host identifiers are not stored in plaintext
+
+## Reporting A Vulnerability
+
+Please do not open a public issue for vulnerabilities.
 
 Email: forcepack6@gmail.com
 
 Include:
-- Description of the vulnerability
-- Steps to reproduce
-- Potential impact
-- Any suggested fix (optional)
 
-We will respond within 72 hours and aim to release a patch within 7 days for critical issues.
+- description of the vulnerability
+- steps to reproduce
+- potential impact
+- suggested fix, if known
 
-## Scope
-- In scope: code execution paths, skill trust chain bypass, credential exposure, CORAL swarm injection
-- Out of scope: vulnerabilities in third-party LLM APIs themselves
+## Current Status
 
-## Tiered autonomy
-Athena has a built-in tiered autonomy system (Tier 0/1/2) that controls what the agent can do without
-explicit user approval. Destructive operations (file deletion, system writes, shell commands) require
-Tier 2 confirmation by default. If you find a way to bypass this gate, please report it.
+The v4 scaffold is not yet a production runtime. During the rebuild, security PRs should include tests that pin the relevant behavior in CI.
