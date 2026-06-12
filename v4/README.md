@@ -4,17 +4,20 @@ This directory is the full redesign track for Athena. The old v3 runtime has bee
 
 ## Current state
 
-This is a P0 scaffold:
+This tree now carries the v4 implementation surface for the full rebuild plan:
 
 - strict TypeScript package boundary
 - shared event contract in `src/shared/events.ts`
-- server and CLI entrypoints
-- byte-bounded event replay buffer
-- Node 22.13 `node:sqlite` / FTS5 boot self-check
-- initial Svelte system shell
-- CI job for v4 verification
+- server, CLI, and Svelte UI entrypoints
+- authenticated WebSocket replay with a 4MB byte-bounded ring
+- composition root, DB worker, schema bootstrap, and storage capability events
+- provider failover router and L2 turn engine
+- deterministic risk engine, approval leases, and typed tool registry
+- memory, instincts, machine fingerprints, migration planning, skills, CORAL, watchers, compression, debug helpers, offline model selection, and runtime manifest verification
+- eight-view Svelte shell for Chat, Approvals, Memory, Skills, Agents, Watchers, Sessions, and System
+- CI verification on Ubuntu, Windows, and macOS
 
-It is not yet the production runtime.
+The remaining cutover work is operational rather than architectural: pin real vendored artifact SHA-256 values, run migration against live v3 data, and validate from the shipped runtime on the physical drive.
 
 ## Design stance
 
@@ -26,7 +29,7 @@ The shipping artifact still must not contain `node_modules`. Build output, vendo
 
 ```bash
 corepack enable
-pnpm install --no-frozen-lockfile
+pnpm install --frozen-lockfile
 pnpm verify
 ```
 

@@ -14,5 +14,5 @@
     "allowSyntheticDefaultImports": true,
     "types": ["node", "vitest"]
   },
-  "include": ["src/**/*.ts", "src/**/*.svelte", "scripts/**/*.mjs", "tests/**/*.ts", "vite.config.ts"]
+  "include": ["src/**/*.ts", "src/**/*.svelte", "scripts/**/*.mjs", "scripts/**/*.ts", "tests/**/*.ts", "vite.config.ts"]
 }

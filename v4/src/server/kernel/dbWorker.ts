@@ -1,4 +1,5 @@
 import { Worker } from "node:worker_threads";
+import { ATHENA_FTS_SQL, ATHENA_SCHEMA_SQL } from "../storage/schema.js";
 
 export type DbWorkerMessage =
   | { id: number; type: "ping" }
@@ -31,7 +32,7 @@ export class DbWorker {
   constructor(options: DbWorkerOptions = {}) {
     this.#worker = new Worker(WORKER_SOURCE, {
       eval: true,
-      workerData: { dbPath: options.dbPath ?? "data/athena.db" },
+      workerData: { dbPath: options.dbPath ?? "data/athena.db", schemaSql: ATHENA_SCHEMA_SQL, ftsSql: ATHENA_FTS_SQL },
     });
     this.#worker.on("message", (message: unknown) => this.#handleMessage(message));
     this.#worker.on("error", (error: Error) => this.#rejectAll(error));
@@ -99,6 +100,12 @@ async function open() {
   }
   const sqlite = await import("node:sqlite");
   db = new sqlite.DatabaseSync(workerData.dbPath);
+  db.exec(workerData.schemaSql);
+  try {
+    db.exec(workerData.ftsSql);
+  } catch {
+    db.exec("INSERT OR REPLACE INTO settings (key, value) VALUES ('sqlite_fts5', 'unavailable')");
+  }
   db.exec("CREATE TABLE IF NOT EXISTS security_audit (id INTEGER PRIMARY KEY, ts TEXT NOT NULL, action TEXT NOT NULL, outcome TEXT NOT NULL, reason TEXT NOT NULL, remote_address TEXT)");
   return db;
 }

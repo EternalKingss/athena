@@ -1,0 +1,36 @@
+{
+  "node": {
+    "version": "22.13.0",
+    "moduleVersion": 127
+  },
+  "artifacts": [
+    {
+      "name": "node-runtime",
+      "platform": "win-x64",
+      "path": "runtime/win-x64/node/node.exe",
+      "sha256": "TO_BE_PINNED_BY_SETUP",
+      "required": true
+    },
+    {
+      "name": "node-runtime",
+      "platform": "mac-arm64",
+      "path": "runtime/mac-arm64/node/bin/node",
+      "sha256": "TO_BE_PINNED_BY_SETUP",
+      "required": true
+    },
+    {
+      "name": "node-runtime",
+      "platform": "linux-x64",
+      "path": "runtime/linux-x64/node/bin/node",
+      "sha256": "TO_BE_PINNED_BY_SETUP",
+      "required": true
+    },
+    {
+      "name": "bge-small-en-v1.5-onnx",
+      "platform": "all",
+      "path": "vendor/models/bge-small-en-v1.5/model.onnx",
+      "sha256": "TO_BE_PINNED_BY_SETUP",
+      "required": false
+    }
+  ]
+}

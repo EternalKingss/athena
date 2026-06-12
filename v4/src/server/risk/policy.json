@@ -1,0 +1,9 @@
+{
+  "systemPaths": {
+    "posix": ["/", "/bin", "/boot", "/dev", "/etc", "/home", "/lib", "/root", "/sbin", "/usr", "/var"],
+    "windows": ["c:\\\\windows", "c:\\\\program files", "c:\\\\program files (x86)", "c:\\\\users"]
+  },
+  "tier2Commands": ["rm", "del", "erase", "format", "mkfs", "shutdown", "reboot", "reg", "diskpart", "chmod", "chown"],
+  "tier1Commands": ["curl", "wget", "git", "npm", "pnpm", "pip", "python", "node", "powershell", "pwsh", "cmd"],
+  "interpreters": ["bash", "sh", "zsh", "python", "node", "powershell", "pwsh", "cmd"]
+}
