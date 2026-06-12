@@ -7,8 +7,8 @@ on:
     branches: [main]
 
 jobs:
-  test:
-    name: Regression tests
+  v3-regression:
+    name: v3 regression tests
     runs-on: ubuntu-latest
 
     steps:
@@ -34,8 +34,8 @@ jobs:
       - name: Run regression suite
         run: node regression.mjs
 
-  lint:
-    name: Lint
+  v3-lint:
+    name: v3 lint guards
     runs-on: ubuntu-latest
 
     steps:
@@ -50,7 +50,7 @@ jobs:
       - name: Check for em dashes in source files
         run: |
           echo "Checking for em dashes (U+2014) in .mjs files..."
-          if grep -rn $'—' athena/ regression.mjs 2>/dev/null; then
+          if grep -rn $'\u2014' athena/ regression.mjs 2>/dev/null; then
             echo "ERROR: Em dashes found in source files. Use -- instead."
             exit 1
           fi
@@ -65,13 +65,37 @@ jobs:
           fi
           echo "OK -- no CommonJS found"
 
-      - name: Verify no package.json dependencies
+      - name: Verify root package has no dependencies
         run: |
           if [ -f package.json ]; then
             deps=$(node -e "const p=require('./package.json'); const d=Object.keys({...p.dependencies,...p.devDependencies}); console.log(d.length)")
             if [ "$deps" -gt "0" ]; then
-              echo "ERROR: package.json has external dependencies. Athena must have zero npm deps."
+              echo "ERROR: root package.json has external dependencies. v3 must stay zero npm deps."
               exit 1
             fi
           fi
-          echo "OK -- no npm dependencies"
+          echo "OK -- v3 has no npm dependencies"
+
+  v4-verify:
+    name: v4 scaffold verify
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.13.0'
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Install v4 dependencies
+        working-directory: v4
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Verify v4 scaffold
+        working-directory: v4
+        run: pnpm verify
