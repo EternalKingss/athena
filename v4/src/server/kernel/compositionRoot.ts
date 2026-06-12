@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { AlertSeverity, AlertState } from "../../shared/events.js";
 import { athenaError } from "../../shared/errors.js";
+import { ApprovalBroker } from "../approvals/approvalBroker.js";
 import { ApprovalManager } from "../approvals/sessionLeases.js";
 import { CoralLog, type CoralEntry } from "../coral/coralLog.js";
 import { ErrorHub, type ErrorSink } from "../errors/errorHub.js";
@@ -51,6 +52,9 @@ export type CompositionRoot = {
   watchers: WatcherEngine;
   providerHealth: ProviderHealth;
   approvals: ApprovalManager;
+  approvalBroker: ApprovalBroker;
+  setAutoApprove: (enabled: boolean) => void;
+  isAutoApprove: () => boolean;
   tools: ToolRegistry;
   executor: ToolExecutor;
   errors: ErrorHub;
@@ -75,6 +79,8 @@ export function createCompositionRoot(options: CompositionRootOptions = {}): Com
   const watchers = new WatcherEngine();
   const providerHealth = new ProviderHealth();
   const approvals = new ApprovalManager();
+  const approvalBroker = new ApprovalBroker();
+  let autoApprove = false;
   const tools = new ToolRegistry();
 
   const errorSink: ErrorSink = (record) => {
@@ -114,6 +120,7 @@ export function createCompositionRoot(options: CompositionRootOptions = {}): Com
     bus,
     tools,
     approvals,
+    approvalBroker,
     memory,
     providerHealth,
     skills,
@@ -126,7 +133,8 @@ export function createCompositionRoot(options: CompositionRootOptions = {}): Com
     router,
     executor,
     agent,
-    getExecutionContext: (source) => ({ workspaceRoot, actor: source === "background" ? "background" : "interactive", autoApprove: false }),
+    // Background actors never inherit AUTO_APPROVE (SEMANTICS); only the interactive session does.
+    getExecutionContext: (source) => ({ workspaceRoot, actor: source === "background" ? "background" : "interactive", autoApprove: source === "background" ? false : autoApprove }),
   });
 
   const services: Services = {
@@ -173,6 +181,12 @@ export function createCompositionRoot(options: CompositionRootOptions = {}): Com
     watchers,
     providerHealth,
     approvals,
+    approvalBroker,
+    setAutoApprove: (enabled) => {
+      autoApprove = enabled;
+      bus.emit({ type: "security_audit", action: "http_request", outcome: enabled ? "allowed" : "denied", reason: `auto_approve_${enabled ? "enabled" : "disabled"}` });
+    },
+    isAutoApprove: () => autoApprove,
     tools,
     executor,
     errors,

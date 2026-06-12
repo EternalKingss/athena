@@ -8,7 +8,8 @@ import { performance } from "node:perf_hooks";
 import { promisify } from "node:util";
 import type { RiskTier } from "../../shared/events.js";
 import { AthenaRuntimeError, athenaError } from "../../shared/errors.js";
-import { ApprovalManager, hashScope } from "../approvals/sessionLeases.js";
+import type { ApprovalBroker } from "../approvals/approvalBroker.js";
+import { ApprovalManager, type ApprovalLease, hashScope } from "../approvals/sessionLeases.js";
 import { parseStacktrace, summarizeNetDebug } from "../debug/debugTools.js";
 import type { EventBus } from "../kernel/eventBus.js";
 import type { MemoryStore } from "../memory/memoryStore.js";
@@ -46,6 +47,7 @@ export type ToolExecutorDeps = {
   approvals: ApprovalManager;
   memory: MemoryStore;
   recordAudit: (record: AuditRecord) => Promise<void>;
+  approvalBroker?: ApprovalBroker;
   providerHealth?: ProviderHealth;
   skills?: SkillRegistry;
   writeMemory?: (body: string) => Promise<{ action: string }>;
@@ -145,7 +147,22 @@ export class ToolExecutor {
 
     if (tier >= 2) {
       const scope = command ?? `${name}:${JSON.stringify(input)}`;
-      const decision = this.deps.approvals.decide(scope, 2, { actor: ctx.actor, autoApprove: ctx.autoApprove });
+      const preview = (command ?? JSON.stringify(input)).slice(0, 200);
+      let decision = this.deps.approvals.decide(scope, 2, { actor: ctx.actor, autoApprove: ctx.autoApprove });
+
+      // Interactive action with no standing lease: ask the UI and wait (fails closed on timeout).
+      if (!decision.allowed && decision.reason === "explicit_approval_required" && this.deps.approvalBroker) {
+        this.deps.bus.emit({ type: "approval_required", id, tool: name, reason: "awaiting_user_approval", preview });
+        const response = await this.deps.approvalBroker.request(id);
+        if (response.approved) {
+          const lease: ApprovalLease | undefined = response.forSession ? this.deps.approvals.grant(scope) : undefined;
+          decision = { allowed: true, reason: response.forSession ? "user_approved_session" : "user_approved_once", ...(lease ? { lease } : {}) };
+        } else {
+          decision = { allowed: false, reason: "user_denied" };
+        }
+        this.deps.bus.emit({ type: "approval_resolved", id, approved: response.approved, ...(decision.lease ? { grantId: decision.lease.id } : {}) });
+      }
+
       await this.deps.recordAudit({
         id: randomUUID(),
         action: name,
@@ -155,7 +172,7 @@ export class ToolExecutor {
         reason: decision.reason,
       });
       if (!decision.allowed) {
-        this.deps.bus.emit({ type: "approval_required", id, tool: name, reason: decision.reason, preview: (command ?? JSON.stringify(input)).slice(0, 200) });
+        if (!this.deps.approvalBroker) this.deps.bus.emit({ type: "approval_required", id, tool: name, reason: decision.reason, preview });
         this.deps.bus.emit({ type: "tool_finished", id, ok: false, bytes: 0 });
         return { ok: false, output: `blocked: ${decision.reason}`, tier, capped: false };
       }

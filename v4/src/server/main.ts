@@ -77,6 +77,8 @@ export async function startServer(options: ServerOptions = {}) {
     getPort: () => port,
     onClientEvent: async (event) => {
       if (event.type === "chat_submit") await root.turnEngine.run(event.text, "ui");
+      else if (event.type === "approval_response") root.approvalBroker.resolve(event.id, event.approved, event.forSession ?? false);
+      else if (event.type === "set_auto_approve") root.setAutoApprove(event.enabled);
     },
   });
 
