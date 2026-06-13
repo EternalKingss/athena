@@ -122,6 +122,15 @@
   function scrollThread() {
     if (threadEl) threadEl.scrollTop = threadEl.scrollHeight;
   }
+  // Make click-only elements (nav items, tabs, toggles) keyboard-activatable.
+  function key(fn: () => void) {
+    return (event: KeyboardEvent) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        fn();
+      }
+    };
+  }
 
   // ── derived: conversation timeline ──
   type ThreadItem =
@@ -365,7 +374,7 @@
       <div class="nav-eyebrow">Workspace</div>
       <nav class="nav">
         {#each NAV_MAIN as item}
-          <div class="nav-item" class:active={active === item.view} on:click={() => (active = item.view)} role="button" tabindex="0">
+          <div class="nav-item" class:active={active === item.view} on:click={() => (active = item.view)} on:keydown={key(() => (active = item.view))} role="button" tabindex="0">
             <svg><use href={"#" + item.icon} /></svg>{item.label}
           </div>
         {/each}
@@ -373,19 +382,19 @@
 
       <div class="nav-eyebrow">Her Mind</div>
       <nav class="nav">
-        <div class="nav-item" class:active={active === "memory"} on:click={() => (active = "memory")} role="button" tabindex="0">
+        <div class="nav-item" class:active={active === "memory"} on:click={() => (active = "memory")} on:keydown={key(() => (active = "memory"))} role="button" tabindex="0">
           <svg><use href="#i-book" /></svg>Memory <span class="nav-badge">{counts.memory}</span>
         </div>
-        <div class="nav-item" class:active={active === "skills"} on:click={() => (active = "skills")} role="button" tabindex="0">
+        <div class="nav-item" class:active={active === "skills"} on:click={() => (active = "skills")} on:keydown={key(() => (active = "skills"))} role="button" tabindex="0">
           <svg><use href="#i-spark" /></svg>Skills <span class="nav-badge">{counts.skills}</span>
         </div>
-        <div class="nav-item" class:active={active === "agents"} on:click={() => (active = "agents")} role="button" tabindex="0">
+        <div class="nav-item" class:active={active === "agents"} on:click={() => (active = "agents")} on:keydown={key(() => (active = "agents"))} role="button" tabindex="0">
           <svg><use href="#i-agents" /></svg>Agents <span class="nav-badge" class:live={coralEntries.length > 0}>{counts.coral}</span>
         </div>
-        <div class="nav-item" class:active={active === "sessions"} on:click={() => (active = "sessions")} role="button" tabindex="0">
+        <div class="nav-item" class:active={active === "sessions"} on:click={() => (active = "sessions")} on:keydown={key(() => (active = "sessions"))} role="button" tabindex="0">
           <svg><use href="#i-clock" /></svg>Sessions
         </div>
-        <div class="nav-item" class:active={active === "settings"} on:click={() => (active = "settings")} role="button" tabindex="0">
+        <div class="nav-item" class:active={active === "settings"} on:click={() => (active = "settings")} on:keydown={key(() => (active = "settings"))} role="button" tabindex="0">
           <svg><use href="#i-gear" /></svg>Settings
         </div>
       </nav>
@@ -417,8 +426,8 @@
           </div>
           <span class="chip"><svg><use href="#i-grid" /></svg>This machine · {modeLabel}</span>
           <div class="topbar-actions">
-            <button class="icon-btn" on:click={() => (active = "memory")}><svg><use href="#i-search" /></svg></button>
-            <button class="icon-btn" on:click={() => (active = "dash")}><svg><use href="#i-bell" /></svg></button>
+            <button class="icon-btn" aria-label="Search memory" on:click={() => (active = "memory")}><svg><use href="#i-search" /></svg></button>
+            <button class="icon-btn" aria-label="Dashboard" on:click={() => (active = "dash")}><svg><use href="#i-bell" /></svg></button>
           </div>
         </div>
 
@@ -499,11 +508,11 @@
         <div class="composer-wrap">
           <div class="composer">
             <div class="composer-tools">
-              <button class="c-btn"><svg><use href="#i-attach" /></svg></button>
-              <button class="c-btn mic" class:listening on:click={() => (listening = !listening)}><svg><use href="#i-mic" /></svg></button>
+              <button class="c-btn" aria-label="Attach"><svg><use href="#i-attach" /></svg></button>
+              <button class="c-btn mic" class:listening aria-label="Voice input" on:click={() => (listening = !listening)}><svg><use href="#i-mic" /></svg></button>
             </div>
             <textarea rows="1" bind:value={draft} on:keydown={onComposerKey} placeholder="Ask Athena, give her a task, or type / for commands…"></textarea>
-            <button class="send-btn" on:click={submitTurn}><svg><use href="#i-send" /></svg></button>
+            <button class="send-btn" aria-label="Send" on:click={submitTurn}><svg><use href="#i-send" /></svg></button>
           </div>
           <div class="composer-hint">
             <span><kbd>/recall</kbd> search memory</span>
@@ -594,7 +603,7 @@
               </div>
 
               <div class="card col-5">
-                <div class="card-head"><div class="ci bg-bronze"><svg width="17" height="17" style="color:var(--bronze-deep)"><use href="#i-book" /></svg></div><h3>Memory</h3><span class="more" on:click={() => (active = "memory")} role="button" tabindex="0">Open →</span></div>
+                <div class="card-head"><div class="ci bg-bronze"><svg width="17" height="17" style="color:var(--bronze-deep)"><use href="#i-book" /></svg></div><h3>Memory</h3><span class="more" on:click={() => (active = "memory")} on:keydown={key(() => (active = "memory"))} role="button" tabindex="0">Open →</span></div>
                 <div class="flex between" style="font-size:12px;color:var(--ink-3)"><span>Long-term store</span><span>{counts.memory} entries</span></div>
                 <div class="meter"><span style="width:{Math.min(100, counts.memory * 4)}%"></span></div>
                 <div class="mem-line"><span>Memories</span><b>{counts.memory}</b></div>
@@ -626,7 +635,7 @@
               </div>
 
               <div class="card col-7">
-                <div class="card-head"><div class="ci bg-lapis"><svg width="17" height="17" style="color:var(--lapis-deep)"><use href="#i-clock" /></svg></div><h3>Recent activity</h3><span class="more" on:click={() => (active = "sessions")} role="button" tabindex="0">All →</span></div>
+                <div class="card-head"><div class="ci bg-lapis"><svg width="17" height="17" style="color:var(--lapis-deep)"><use href="#i-clock" /></svg></div><h3>Recent activity</h3><span class="more" on:click={() => (active = "sessions")} on:keydown={key(() => (active = "sessions"))} role="button" tabindex="0">All →</span></div>
                 {#if recentSessions.length === 0}
                   <p class="muted">No conversations yet.</p>
                 {:else}
@@ -671,9 +680,9 @@
         <div class="dash">
           <div class="dash-inner" style="max-width:1000px">
             <div class="subnav">
-              <span class="tab" class:active={memoryTab === "all"} on:click={() => (memoryTab = "all")} role="button" tabindex="0">All<span class="n">{counts.memory + counts.instincts}</span></span>
-              <span class="tab" class:active={memoryTab === "memory"} on:click={() => (memoryTab = "memory")} role="button" tabindex="0">Memories<span class="n">{counts.memory}</span></span>
-              <span class="tab" class:active={memoryTab === "instincts"} on:click={() => (memoryTab = "instincts")} role="button" tabindex="0">Instincts<span class="n">{counts.instincts}</span></span>
+              <span class="tab" class:active={memoryTab === "all"} on:click={() => (memoryTab = "all")} on:keydown={key(() => (memoryTab = "all"))} role="button" tabindex="0">All<span class="n">{counts.memory + counts.instincts}</span></span>
+              <span class="tab" class:active={memoryTab === "memory"} on:click={() => (memoryTab = "memory")} on:keydown={key(() => (memoryTab = "memory"))} role="button" tabindex="0">Memories<span class="n">{counts.memory}</span></span>
+              <span class="tab" class:active={memoryTab === "instincts"} on:click={() => (memoryTab = "instincts")} on:keydown={key(() => (memoryTab = "instincts"))} role="button" tabindex="0">Instincts<span class="n">{counts.instincts}</span></span>
             </div>
 
             {#if memoryTab !== "instincts"}
@@ -800,7 +809,7 @@
                 <div class="set-row"><div class="sr-text"><b>Tier 0 — read-only</b><span>Runs silently</span></div><div class="sr-control"><span class="tier-tag" style="background:var(--wash-olive);color:var(--olive-deep)">always on</span></div></div>
                 <div class="set-row"><div class="sr-text"><b>Tier 1 — low-impact writes</b><span>Runs automatically, written to the audit trail</span></div><div class="sr-control"><span class="tier-tag" style="background:var(--wash-olive);color:var(--olive-deep)">on</span></div></div>
                 <div class="set-row"><div class="sr-text"><b>Tier 2 — destructive actions</b><span>Always pause for explicit approval</span></div><div class="sr-control"><span class="tier-tag" style="background:var(--wash-terra);color:var(--terra-deep)">locked on</span></div></div>
-                <div class="set-row"><div class="sr-text"><b>Auto-approve everything</b><span>Skip Tier 2 gates — interactive session only, never background agents</span></div><div class="sr-control"><span class="toggle" class:on={autoApprove} on:click={toggleAutoApprove} role="switch" tabindex="0" aria-checked={autoApprove}></span></div></div>
+                <div class="set-row"><div class="sr-text"><b>Auto-approve everything</b><span>Skip Tier 2 gates — interactive session only, never background agents</span></div><div class="sr-control"><span class="toggle" class:on={autoApprove} on:click={toggleAutoApprove} on:keydown={key(toggleAutoApprove)} role="switch" tabindex="0" aria-checked={autoApprove}></span></div></div>
               </div>
 
               <div class="set-section">
@@ -813,7 +822,7 @@
               <div class="set-section">
                 <div class="sh"><div class="ci bg-lapis"><svg width="17" height="17" style="color:var(--lapis-deep)"><use href="#i-mic" /></svg></div><div><h3>Appearance</h3><p>How she looks</p></div></div>
                 <div class="set-row"><div class="sr-text"><b>Theme</b><span>Day marble, or warm evening</span></div><div class="sr-control"><div class="seg"><button class:on={!evening} on:click={() => setTheme(false)}>Day</button><button class:on={evening} on:click={() => setTheme(true)}>Evening</button></div></div></div>
-                <div class="set-row"><div class="sr-text"><b>Reduce motion</b><span>Calm the breathing and animations</span></div><div class="sr-control"><span class="toggle" class:on={reduceMotion} on:click={toggleReduceMotion} role="switch" tabindex="0" aria-checked={reduceMotion}></span></div></div>
+                <div class="set-row"><div class="sr-text"><b>Reduce motion</b><span>Calm the breathing and animations</span></div><div class="sr-control"><span class="toggle" class:on={reduceMotion} on:click={toggleReduceMotion} on:keydown={key(toggleReduceMotion)} role="switch" tabindex="0" aria-checked={reduceMotion}></span></div></div>
               </div>
 
               <div class="set-section">
