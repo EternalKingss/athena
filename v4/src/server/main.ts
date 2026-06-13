@@ -1,10 +1,13 @@
 import { createServer } from "node:http";
 import { totalmem } from "node:os";
+import { join } from "node:path";
+import { athenaError } from "../shared/errors.js";
 import { runBootSelfCheck } from "./kernel/bootSelfCheck.js";
-import { createCompositionRoot } from "./kernel/compositionRoot.js";
+import { createCompositionRoot, type CompositionRoot } from "./kernel/compositionRoot.js";
 import { offlineMode, selectLocalModel } from "./offline/localModel.js";
 import { buildCloudProviders } from "./providers/cloudProviders.js";
-import { attachWebSocketTransport, isAllowedHost } from "./transport/webSocket.js";
+import { serveStaticUi } from "./transport/staticUi.js";
+import { attachWebSocketTransport, isAllowedHost, isTokenValid } from "./transport/webSocket.js";
 
 const HOST = "127.0.0.1";
 const DEFAULT_PORT = 48991;
@@ -59,6 +62,7 @@ export async function startServer(options: ServerOptions = {}) {
 
   bus.emit({ type: "boot_ready" });
 
+  const uiRoot = join(import.meta.dirname, "ui");
   const server = createServer((req, res) => {
     const host = req.headers.host ?? "";
     if (!isAllowedHost(host, port)) {
@@ -69,8 +73,38 @@ export async function startServer(options: ServerOptions = {}) {
       return;
     }
 
-    res.setHeader("content-type", "application/json; charset=utf-8");
-    res.end(JSON.stringify({ ok: true, ws: "/ws?token=<session>&since=<seq>" }));
+    const url = new URL(req.url ?? "/", `http://${host}`);
+    const reqPath = url.pathname;
+
+    if (reqPath === "/health" || reqPath === "/healthz") {
+      res.setHeader("content-type", "application/json; charset=utf-8");
+      res.end(JSON.stringify({ ok: true, ws: "/ws?token=<session>&since=<seq>" }));
+      return;
+    }
+
+    // Token-guarded read model for views whose bodies aren't carried on the event
+    // stream (memory/skills/instincts/coral). Same token as the WebSocket.
+    if (reqPath === "/api/snapshot") {
+      if (!isTokenValid(url.searchParams.get("token"), token)) {
+        res.writeHead(401).end("unauthorized");
+        return;
+      }
+      void buildSnapshot(root)
+        .then((snapshot) => {
+          res.setHeader("content-type", "application/json; charset=utf-8");
+          res.end(JSON.stringify(snapshot));
+        })
+        .catch((cause: unknown) => {
+          bus.emit({ type: "error_detail", error: athenaError("http.snapshot_failed", "transport", "error", cause instanceof Error ? cause.message : String(cause)) });
+          if (!res.headersSent) res.writeHead(500).end("snapshot failed");
+        });
+      return;
+    }
+
+    // Everything else: the built Svelte UI.
+    void serveStaticUi(uiRoot, reqPath, res).catch(() => {
+      if (!res.headersSent) res.writeHead(500).end("error");
+    });
   });
   const transport = attachWebSocketTransport(server, {
     bus,
@@ -95,6 +129,51 @@ export async function startServer(options: ServerOptions = {}) {
     await root.close();
   };
   return { server, bus, token, url: `http://${HOST}:${port}/?token=${token}`, close };
+}
+
+/**
+ * Current durable read model for the UI views that need full bodies (the event
+ * stream only carries ids/metadata). Reads through the repository, which is kept
+ * in sync with the in-memory stores on every mutation.
+ */
+async function buildSnapshot(root: CompositionRoot) {
+  const [memory, instincts, skills, coral, alerts, providers, audit, errors, instinctEvents] = await Promise.all([
+    root.repo.loadMemory(),
+    root.repo.loadInstincts(),
+    root.repo.loadSkills(),
+    root.repo.loadCoral(),
+    root.repo.loadAlerts(),
+    root.repo.loadProviderHealth(),
+    root.repo.countAudit(),
+    root.repo.countErrors(),
+    root.repo.countInstinctEvents(),
+  ]);
+  return {
+    memory,
+    instincts: instincts.map((instinct) => ({
+      id: instinct.id,
+      domain: instinct.domain,
+      body: instinct.body,
+      confidence: instinct.confidence,
+      seenSessions: instinct.seenSessions.size,
+      ...(instinct.machineId === undefined ? {} : { machineId: instinct.machineId }),
+    })),
+    skills,
+    coral,
+    alerts,
+    providers,
+    autoApprove: root.isAutoApprove(),
+    counts: {
+      memory: memory.length,
+      instincts: instincts.length,
+      skills: skills.length,
+      coral: coral.length,
+      alerts: alerts.length,
+      audit,
+      errors,
+      instinctEvents,
+    },
+  };
 }
 
 function auditRow(action: "http_request", outcome: "denied", reason: string, remoteAddress: string | undefined) {

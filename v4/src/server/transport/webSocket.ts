@@ -148,7 +148,7 @@ export function isAllowedOrigin(origin: string | undefined, port: number): boole
   return origin === undefined || origin === `http://127.0.0.1:${port}` || origin === `http://localhost:${port}`;
 }
 
-function isTokenValid(candidate: string | null, token: string): boolean {
+export function isTokenValid(candidate: string | null, token: string): boolean {
   if (!candidate) return false;
   const left = Buffer.from(candidate, "hex");
   const right = Buffer.from(token, "hex");
