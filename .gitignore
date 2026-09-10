@@ -1,0 +1,26 @@
+# Secrets -- never commit
+config/.env
+data/memory/machines/*/*.env
+*.pem
+*.key
+
+# Personal data / runtime state -- not source code, not for a public repo
+data/
+
+# Model weights and prebuilt runtime binaries -- huge, regenerable via runtime/get-offline.*
+runtime/models/
+runtime/win-x64/
+
+# Dependencies -- regenerable via npm install
+node_modules/
+
+# Old local snapshot, not part of the project
+_audit_backup_*/
+
+# Logs and debug scratch output
+*.log
+sse_verify2.txt
+
+# OS/editor cruft
+.DS_Store
+Thumbs.db

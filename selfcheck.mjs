@@ -1,0 +1,300 @@
+import { readdirSync, existsSync, readFileSync as rfs, writeFileSync as wfs, rmSync } from 'node:fs';
+import { execFileSync, spawn } from 'node:child_process';
+
+let p = 0, f = 0;
+const t = (n, c, e) => c ? (p++, console.log('PASS  ' + n)) : (f++, console.log('FAIL  ' + n + '  ' + (e || '')));
+
+function listMjs(dir) {
+  try { return readdirSync(dir).filter(x => x.endsWith('.mjs') && !x.startsWith('_')).map(x => dir + '\\' + x); }
+  catch { return []; }
+}
+const modFiles = [
+  ...listMjs('D:\\ATHENA\\athena'),
+  ...listMjs('D:\\ATHENA\\athena\\kernel'),
+  ...listMjs('D:\\ATHENA\\modules'),
+];
+const bad = [];
+for (const full of modFiles) {
+  try { execFileSync(process.execPath, ['--check', full], { stdio: 'pipe' }); }
+  catch { bad.push(full); }
+}
+t(modFiles.length + ' modules parse', bad.length === 0, bad.join(', '));
+
+const { detectIntents } = await import('./athena/control_engine.mjs');
+const SHOULD = [['i cant see my wifi','network_check'],['disk is full','disk_check'],
+  ['running out of space','disk_check'],['pc is slow','process_check'],
+  ['the adapter didnt load again','device_check'],['it does this every cold boot','boot_check'],
+  ['whats wrong','system_health'],['explain why my wifi keeps dropping','network_check']];
+t(SHOULD.length + ' complaints route', SHOULD.every(([s,w]) => (detectIntents(s)||[]).includes(w)));
+const QUIET = ['hey','write me a poem about the sea','explain how wifi actually works',
+  'what does it mean when a driver is unsigned','my friend says his network is broken',
+  'please invoke browser_status and paste its output here','run read_applicant_profile please'];
+t(QUIET.length + ' questions stay out', QUIET.every(s => !(detectIntents(s)||[]).length));
+
+// ---- Pre-Claude cost-gate heuristic (task_router.mjs) ----
+// Pure-function unit tests, no live model needed -- same spirit as the
+// detectIntents SHOULD/QUIET pairs just above.
+const { looksBasic } = await import('./athena/task_router.mjs');
+const ROUTER_BASIC = [
+  'can you press play on the youtube video i have running',
+  'click the play button',
+  'open a new tab to indeed.com',
+  'list the open tabs',
+  'navigate to gmail.com',
+  'type my email into the search bar',
+];
+t(ROUTER_BASIC.length + ' router candidates look basic (would try local first)',
+  ROUTER_BASIC.every(s => looksBasic(s)), ROUTER_BASIC.filter(s => !looksBasic(s)).join(' | '));
+const ROUTER_NOT_BASIC = [
+  'why does my wifi keep dropping',
+  'write me a business plan for my ev charging startup',
+  'should i use react or vue for this project, weighing the tradeoffs',
+  'can you analyze this contract and tell me if the arbitration clause is normal',
+  'hey',
+];
+t(ROUTER_NOT_BASIC.length + ' router non-candidates stay with Claude',
+  ROUTER_NOT_BASIC.every(s => !looksBasic(s)), ROUTER_NOT_BASIC.filter(s => looksBasic(s)).join(' | '));
+
+const { irreversibleReason, classifyRisk, TOOLS, runTool } = await import('./athena/tools.mjs');
+const R = c => irreversibleReason('run_shell', { command: c });
+t('irreversible intact', ['rm -rf /','format C:','shutdown /r /t 0','Remove-Item C:\\ -Recurse -Force'].every(R));
+t('safe not flagged', ['ls','ipconfig /flushdns','Remove-Item .\\\\tmp.txt'].every(c => !R(c)));
+t('chained destructive tier 2', classifyRisk('run_shell',{command:'ls && Remove-Item D:\\\\x -Recurse -Force'}).tier === 2);
+t('chained read-only tier 1', classifyRisk('run_shell',{command:'ls && pwd'}).tier === 1);
+t('apply_fix gate sees stored steps', irreversibleReason('apply_fix',{id:'clear-windows-update-cache'}) !== null);
+
+// Module 3 phase 3 (job search & apply) ships no job_application_submit tool at all --
+// job-application submits are explicitly auto-actionable (no approval), only
+// purchase/checkout clicks are gated. See tools.mjs's PURCHASE_LIKE/JOB_APPLY_LIKE comment.
+t('browser_click job-apply submit stays tier 1 (auto-actionable)',
+  classifyRisk('browser_click', {text:'Submit Application'}).tier === 1 && classifyRisk('browser_click', {text:'Apply Now'}).tier === 1);
+t('browser_click job-apply submit not irreversible',
+  irreversibleReason('browser_click', {text:'Submit Application'}) === null && irreversibleReason('browser_click', {text:'Apply Now'}) === null);
+t('browser_click purchase-like tier 2',
+  classifyRisk('browser_click', {text:'Place Order'}).tier === 2 && classifyRisk('browser_click', {text:'Buy Now'}).tier === 2);
+t('browser_click purchase-like irreversible', irreversibleReason('browser_click', {text:'Complete Purchase'}) !== null);
+t('browser_click ordinary tier 1', classifyRisk('browser_click', {text:'Next page'}).tier === 1);
+t('browser_click ordinary not irreversible', irreversibleReason('browser_click', {text:'Next page'}) === null);
+const names = TOOLS.map(x => x.function?.name);
+t('38 tools, no dupes', names.length === 38 && new Set(names).size === 38, names.length);
+
+const { publishMachineId } = await import('./athena/machines.mjs');
+const { loadInstincts } = await import('./athena/memory.mjs');
+const here = publishMachineId();
+t('machine id resolves', Boolean(here) && here.length > 8, here);
+const block = loadInstincts();
+t('instincts still load', block.includes('INSTINCTS') && block.length > 200, block.length + ' chars');
+t('no other-machine facts leaked', !block.includes('Athlon Silver') || block.includes('[conflict]'));
+
+const { allFixes } = await import('./athena/machine_fixes.mjs');
+const fixes = await allFixes();
+t(fixes.length + ' fixes have verify + detect', fixes.every(x => x.verify && x.detect));
+
+// ---- Athena OS kernel -- registry, router, daemon, module 1 ----
+const { PATHS } = await import('./athena/paths.mjs');
+const { registerModule, isHealthy, _resetRegistryForTests } = await import('./athena/kernel/registry.mjs');
+const { dispatch } = await import('./athena/kernel/router.mjs');
+const { scheduleTask, listScheduled, tick } = await import('./athena/kernel/daemon.mjs');
+const { bootKernel, _resetKernelForTests } = await import('./athena/kernel/index.mjs');
+const { makeCapability, ContractViolation } = await import('./athena/kernel/contract.mjs');
+
+_resetKernelForTests();
+const kernel = bootKernel({ startHeartbeat: false }); // no live interval in a one-shot test process
+
+const sysMod = kernel.listModules().find(m => m.name === 'system');
+t('module 1 (system) registers all 38 tools as capabilities', sysMod?.capabilities.length === 38, sysMod?.capabilities.length);
+t('module 1 healthy after boot', kernel.isHealthy('system') === true);
+
+// ---- Module 2 (browser) -- isolation, tool-surface merge, relay round-trip ----
+// Static import-graph check: module 1 and module 2 must never import each
+// other's files, whatever their comments say -- only actual import
+// specifiers count, so a header comment that merely *mentions* "browser"
+// (kernel/index.mjs's does, describing future registrations) can't cause a
+// false failure here.
+function importSpecifiers(src) {
+  return [...src.matchAll(/^s*imports+[^'"]*froms+['"]([^'"]+)['"]/gm)].map(m => m[1]);
+}
+const systemSrc  = rfs('./athena/modules/system.mjs', 'utf8');
+const browserSrc = rfs('./athena/modules/browser.mjs', 'utf8');
+const relaySrc   = rfs('./athena/modules/browser/relay.mjs', 'utf8');
+const systemImports  = importSpecifiers(systemSrc);
+const browserImports = importSpecifiers(browserSrc);
+const relayImports   = importSpecifiers(relaySrc);
+const noCrossImports =
+  !systemImports.some(s => s.includes('browser')) &&
+  !browserImports.some(s => s.includes('system') || s.includes('../tools.mjs')) &&
+  !relayImports.some(s => s.includes('system') || s.includes('tools.mjs'));
+t('module 1 and module 2 never import each other (static import-graph check)',
+  noCrossImports, JSON.stringify({ systemImports, browserImports, relayImports }));
+
+const browserMod = kernel.listModules().find(m => m.name === 'browser');
+t('module 2 (browser) registers all 7 capabilities', browserMod?.capabilities.length === 7, browserMod?.capabilities.length);
+t('module 2 healthy after boot (relay listening)', kernel.isHealthy('browser') === true);
+
+const { toolsForModel } = await import('./athena/kernel/toolSurface.mjs');
+const cloudNames = toolsForModel('claude-opus-5').map(x => x.function.name);
+t('kernel tool surface merges module 2 capabilities for cloud models',
+  cloudNames.length === 51 && cloudNames.includes('browser_navigate') && cloudNames.includes('browser_screenshot') && cloudNames.includes('delegate_to_local') && cloudNames.includes('read_applicant_profile'),
+  cloudNames.length);
+t('kernel tool surface merges module 3 (google) capabilities for cloud models',
+  cloudNames.includes('email_list') && cloudNames.includes('email_draft') && cloudNames.includes('calendar_create_event'),
+  cloudNames.length);
+const localToolNames = toolsForModel('local-qwen2-5-3b-instruct-q4-k-m').map(x => x.function.name);
+t('kernel tool surface respects localOk:false for local models',
+  localToolNames.length === 18 && localToolNames.includes('browser_navigate') && !localToolNames.includes('browser_screenshot') && !localToolNames.includes('delegate_to_local') && localToolNames.includes('read_applicant_profile'),
+  localToolNames.length);
+t('kernel tool surface keeps google writes cloud-only for local models',
+  localToolNames.includes('email_list') && localToolNames.includes('calendar_list') && !localToolNames.includes('email_draft') && !localToolNames.includes('calendar_create_event') && !localToolNames.includes('calendar_update_event'),
+  localToolNames.length);
+
+// Simulated-extension round trip through the REAL relay HTTP server bootKernel()
+// started -- proves the poll / execute / report loop works end to end with
+// plain HTTP calls standing in for the extension, no live Chrome required.
+const { BROWSER_RELAY_PORT } = await import('./athena/config.mjs');
+const relayBase = 'http://127.0.0.1:' + BROWSER_RELAY_PORT;
+const navPromise = kernel.dispatch('browser_navigate', { url: 'https://example.com' }, {});
+await new Promise(r => setTimeout(r, 50)); // let the command land in the relay's queue
+const polled = await fetch(relayBase + '/poll').then(r => r.json());
+t('simulated extension polls and receives the queued command',
+  polled.command?.action === 'browser_navigate' && polled.command?.args?.url === 'https://example.com');
+await fetch(relayBase + '/result', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ id: polled.command.id, ok: true, data: { navigated: 'https://example.com', tabId: 1 } }),
+});
+const navResult = await navPromise;
+let navParsed = null;
+try { navParsed = JSON.parse(navResult); } catch {}
+t("dispatch resolves with the simulated extension's reported result",
+  navParsed?.navigated === 'https://example.com', navResult);
+
+// ---- Module 2 (browser) extension: syntax check ----
+// Native messaging was tried and reverted -- it needs a per-machine
+// registry entry pointing Chrome at a host executable, which fights the
+// "plug into any machine, zero setup" goal this whole project runs on.
+// background.js now talks to the relay directly over HTTP long-poll (see
+// relay.mjs's ?wait=1 handling above, already covered by the simulated
+// round-trip check below), so there's no pinned extension ID and no
+// separate host process to verify -- just that the script parses.
+const extBad = [];
+for (const f of ['./extension/background.js']) {
+  try { execFileSync(process.execPath, ['--check', f], { stdio: 'pipe' }); }
+  catch { extBad.push(f); }
+}
+t('extension script parses (background.js)', extBad.length === 0, extBad.join(', '));
+
+const directResult = await runTool('machine_fixes', {}, true, [], () => {}, async () => '');
+const viaKernel = await kernel.dispatch('machine_fixes', {}, { preApproved: true });
+t('dispatch reaches the real tool (non-error, non-empty)',
+  typeof viaKernel === 'string' && viaKernel.length > 0 && !viaKernel.startsWith('Error: ') &&
+  typeof directResult === 'string' && !directResult.startsWith('Error: '));
+
+const unknownResult = await kernel.dispatch('does_not_exist_capability', {});
+t('unknown capability returns a clean error string, not a throw',
+  unknownResult === 'Error: no module registered for capability "does_not_exist_capability"');
+
+// read_applicant_profile: a missing file should fail clean (JSON, ok:false), never throw --
+// same "no source of ground truth to actually try this against" situation as module 3
+// (delegate)'s live-model round trip: the real resume is one specific user's machine, not
+// something a portable test suite should assume exists.
+const missingProfile = JSON.parse(await runTool('read_applicant_profile',
+  { path: 'D:/ATHENA/this-file-does-not-exist.pdf' }, true, [], () => {}, async () => ''));
+t('read_applicant_profile fails clean on a missing file (no throw, ok:false)',
+  missingProfile.ok === false && /not found/.test(missingProfile.failureReason), JSON.stringify(missingProfile));
+
+let threwContractViolation = false;
+try { registerModule({ name: 'malformed-test-module' }); } // missing capabilities + execute
+catch (e) { threwContractViolation = e instanceof ContractViolation; }
+t('malformed module registration throws ContractViolation, not a silent accept', threwContractViolation);
+
+const flakyModule = {
+  name: 'flaky-test-module',
+  capabilities: [makeCapability({ name: 'flaky_test_capability' })],
+  healthCheck() { throw new Error('simulated health check failure'); },
+  async execute() { return 'should never be reached'; },
+};
+registerModule(flakyModule);
+t('a module whose healthCheck throws is marked unhealthy, not crashed', isHealthy('flaky-test-module') === false);
+const flakyDispatchResult = await dispatch('flaky_test_capability', {});
+t('dispatch refuses a disabled module cleanly instead of calling it',
+  flakyDispatchResult.startsWith('Error: module "flaky-test-module" is currently disabled'));
+
+// Daemon: prove missed-window catch-up without touching the real persisted
+// schedule -- back it up, run the test against the real file (that's what
+// PATHS.schedule points at), then restore exactly what was there before.
+const scheduleExisted = existsSync(PATHS.schedule);
+const scheduleBackup = scheduleExisted ? rfs(PATHS.schedule, 'utf8') : null;
+let daemonFireCount = 0;
+const daemonTestModule = {
+  name: 'daemon-test-module',
+  capabilities: [makeCapability({ name: 'daemon_test_capability' })],
+  async execute() { daemonFireCount++; return 'daemon test fired'; },
+};
+registerModule(daemonTestModule);
+scheduleTask({ capability: 'daemon_test_capability', args: {}, dueAt: new Date(Date.now() - 60_000).toISOString(), note: 'selfcheck: past-due, must fire (missed-window catch-up)' });
+scheduleTask({ capability: 'daemon_test_capability', args: {}, dueAt: new Date(Date.now() + 3_600_000).toISOString(), note: 'selfcheck: future, must not fire yet' });
+const firedThisTick = await tick(dispatch);
+t('daemon fires a past-due task on tick (survives a missed window rather than skipping it)',
+  daemonFireCount === 1 && firedThisTick.length === 1 && firedThisTick[0].status === 'fired');
+const stillPending = listScheduled();
+t('daemon leaves the not-yet-due task pending', stillPending.length === 1 && stillPending[0].status === 'pending');
+if (scheduleExisted) wfs(PATHS.schedule, scheduleBackup);
+else { try { rmSync(PATHS.schedule); } catch {} }
+
+// ---- Local-model context-overflow fix + error telemetry ----
+const { getModelBudget } = await import('./athena/tokens.mjs');
+const { isLocalContextOverflow } = await import('./athena/api.mjs');
+const { logError, recentErrors } = await import('./athena/telemetry.mjs');
+
+const savedCtx = globalThis.__athenaLocalCtxSize;
+globalThis.__athenaLocalCtxSize = undefined;
+t('local budget falls back to a conservative default with no live ctx-size',
+  getModelBudget('local-qwen2-5-3b-instruct-q4-k-m') === 3000);
+globalThis.__athenaLocalCtxSize = 8192;
+t('local budget scales to an 8192 live ctx-size',
+  getModelBudget('local-qwen2-5-3b-instruct-q4-k-m') === Math.floor((8192 - 2048) * 0.6));
+globalThis.__athenaLocalCtxSize = 4096;
+const budgetAt4096 = getModelBudget('local-qwen2-5-3b-instruct-q4-k-m');
+t('local budget scales down further when the ladder degrades to 4096 (this was the actual bug)',
+  budgetAt4096 === Math.floor((4096 - 2048) * 0.6) && budgetAt4096 < 3000, budgetAt4096);
+globalThis.__athenaLocalCtxSize = savedCtx;
+
+t('isLocalContextOverflow matches a real llama.cpp overflow message',
+  isLocalContextOverflow({ status: 400, message: 'HTTP 400: {"error":{"message":"the request exceeds the available context size, try increasing it","type":"exceed_context_size_error"}}' }) === true);
+t('isLocalContextOverflow ignores an unrelated 400 (e.g. a tool-schema error)',
+  isLocalContextOverflow({ status: 400, message: 'HTTP 400: {"error":"invalid function call"}' }) === false);
+t('isLocalContextOverflow ignores non-400s entirely',
+  isLocalContextOverflow({ status: 429, message: 'exceeds context size' }) === false);
+
+// logError/recentErrors -- write a synthetic entry, read it back, then restore
+// the real file exactly as found (same discipline as the schedule.json test above).
+const errorsExisted = existsSync(PATHS.errorsLog);
+const errorsBackup  = errorsExisted ? rfs(PATHS.errorsLog, 'utf8') : null;
+logError('selfcheck_probe', new Error('synthetic test error'), { probe: true });
+await new Promise(r => setTimeout(r, 50)); // appendFile is async, fire-and-forget in logError
+const errText = recentErrors(5);
+t('logError writes an entry recentErrors() can read back',
+  errText.includes('selfcheck_probe') && errText.includes('synthetic test error'));
+if (errorsExisted) wfs(PATHS.errorsLog, errorsBackup);
+else { try { rmSync(PATHS.errorsLog); } catch {} }
+
+_resetKernelForTests();
+
+// real boot
+const proc = spawn(process.execPath, ['athena/athena.mjs'], {
+  cwd: 'D:\\ATHENA', env: { ...process.env, ATHENA_NO_OPEN: '1', ATHENA_UI: '1' },
+  stdio: ['ignore', 'pipe', 'pipe'],
+});
+let out = '';
+proc.stdout.on('data', d => out += d);
+proc.stderr.on('data', d => out += d);
+await new Promise(r => setTimeout(r, 9000));
+proc.kill('SIGTERM');
+await new Promise(r => setTimeout(r, 700));
+try { proc.kill('SIGKILL'); } catch {}
+const fatal = out.split('\n').filter(l => /ReferenceError|SyntaxError|TypeError|is not defined|Cannot find|does not provide an export|ContractViolation/i.test(l));
+t('boots clean', fatal.length === 0, fatal.slice(0,3).join(' | '));
+console.log('   boot: ' + (out.match(/Athena[\s\S]{0,120}/) || [''])[0].replace(/\u001b\[[0-9;]*m/g,'').replace(/\s+/g,' ').slice(0,110));
+
+console.log('\n' + p + ' passed, ' + f + ' failed');
+process.exit(f ? 1 : 0);

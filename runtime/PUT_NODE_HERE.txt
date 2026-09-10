@@ -1,0 +1,8 @@
+Download portable Node (22 LTS+) from https://nodejs.org/dist/ and lay it out as:
+
+  runtime/win-x64/node.exe          (Windows: unzip win-x64 zip, contents here)
+  runtime/mac-arm64/bin/node        (Mac Apple Silicon: darwin-arm64 tar.gz)
+  runtime/mac-x64/bin/node          (Mac Intel: darwin-x64 tar.gz)
+  runtime/linux-x64/bin/node        (Linux: linux-x64 tar.xz)
+
+You only need the platforms you actually plug into. See README.md.
