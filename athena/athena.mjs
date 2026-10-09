@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // ATHENA -- portable AI agent. Lives on a drive, runs on any machine.
 // v3.1: offline-first architecture -- L2 Control Engine (zero dependencies), L3 local LLM, full cloud fallback.
+// v3.2: OS kernel + modules -- Module 1 (system), Module 2 (browser + Chrome extension), Module 3 phases 1-3.
 // Zero npm dependencies -- only Node built-ins.
 
 import * as readline from 'node:readline/promises';

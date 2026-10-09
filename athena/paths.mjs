@@ -35,10 +35,6 @@ export const PATHS = {
   // windows fire late rather than being silently dropped, see kernel/daemon.mjs)
   schedule:   join(ROOT, 'data', 'memory', 'schedule.json'),
 
-  // Cached, extracted resume text (read_applicant_profile in tools.mjs) -- keyed by
-  // source path + mtime, so a resume edit invalidates the cache automatically.
-  resumeCache: join(ROOT, 'data', 'memory', 'applicant_profile.json'),
-
   // Portable runtimes bundled on the drive
   runtime:    RUNTIME,
   python:     isWin ? join(RUNTIME, 'python', 'python.exe')     : join(RUNTIME, 'python', 'bin', 'python3'),

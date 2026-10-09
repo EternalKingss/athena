@@ -91,10 +91,6 @@ export const BROWSER_RELAY_PORT = Number(CFG.BROWSER_RELAY_PORT) || 17861;
 // choice and the heavy one is deliberate.
 export const LOCAL_MODEL_PREF = (CFG.LOCAL_MODEL || '').trim();
 
-// Where read_applicant_profile (tools.mjs) reads the resume from by default. A caller can
-// still pass an explicit path to read a different file; this is just the no-args default.
-export const RESUME_PATH = (CFG.RESUME_PATH || '').trim();
-
 // modules/google.mjs (Module 3, phase 2) -- Gmail + Calendar via one OAuth app/refresh token.
 // Minted once with google_oauth_setup.mjs (repo root); scopes are read + compose (never send)
 // for Gmail, read + create/update for Calendar -- see docs/MODULE3_PLAN.md Section 1. All three
