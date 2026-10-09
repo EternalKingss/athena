@@ -283,33 +283,22 @@ token, tools appear as they execute, and the task list updates in place.
 
 ---
 
-## 15. She keeps working without the internet
+## 15. Offline: she gets the connection back
 
-The part most assistants don't have. Three levels of intelligence that degrade instead of dying.
+Without internet she has one job: restore the connection. Once the cloud model is reachable
+it handles everything else, so offline she doesn't try to diagnose your disk or hold a
+conversation -- she works on the network and tells you exactly where it stands.
 
-```
-   L4 Cloud            L3 Local model         L2 Control engine
-   ---------           --------------         -----------------
-   Claude.             Runs on your GPU.      Measures and repairs
-   50 tools, agents,   Talks, reasons,        with no model at all.
-   skills.             calls 8 tools.
-        |                     |                       |
-        +--credits gone------>+--no net / no GPU----->+- this floor never
-                                                          disappears
-```
+| Situation | What she does |
+|---|---|
+| **Online** | Everything -- full tool surface, agents, skills. Simple mechanical jobs ("click play", "open a tab") go to the local model first to save Claude credits |
+| **Credits or rate limit exhausted** (internet fine) | Falls back to the local model if one is installed |
+| **AI provider down** (internet fine) | Tries the other models, then the local model; tells you it's the provider, not you |
+| **No internet** | Network recovery only: measures the link, applies the safe fixes, retries. If still down, replies with what she measured, what she tried, and the live adapter data. No local-model fallback |
 
-| Tier | When | What she can still do |
-|---|---|---|
-| **L4** Cloud | Default | Everything — full tool surface, agents, skills, crystallisation. Fails over between models automatically when one is rate-limited |
-| **L3** Local model | Credits gone, or no network | Qwen 2.5 3B loads on demand. Starts in ~3s, answers in under 2s. Holds a conversation, runs shell commands, reads and writes files, applies repairs |
-| **L2** Control engine | Always | All twelve diagnostics and the repair library, on raw code. No API key, no internet, no model weights |
-
-**The rule that binds them:** whatever L2 measures is fact. A model above it can explain the
-findings, prioritise them and recommend a repair — but cannot overrule a measurement. That's
-why she doesn't tell you the Wi-Fi is broken when the data says 144 Mbps at zero packet loss.
-
-This is what makes a network fault something she can *fix* rather than something that
-*disables* her.
+**The rule that still binds them:** whatever the control engine measures is fact. A model can
+explain the findings, but cannot overrule a measurement. That's why she doesn't tell you the
+Wi-Fi is broken when the data says 144 Mbps at zero packet loss.
 
 **She repairs her own connection first.** When the cloud model can't be reached, before
 falling back to anything she measures where the link is broken and fixes the layer that
@@ -320,11 +309,11 @@ failed, then retries the same request:
 | No adapter has an address | Restart the adapter (Windows) / NetworkManager (Linux) |
 | Only a 169.254.x.x address | DHCP release and renew |
 | Internet reachable, API name won't resolve | Flush the DNS cache |
-| Address fine, nothing reachable | **Nothing** -- recommends the winsock reset, which needs a reboot and your approval |
+| Address fine, nothing reachable | **Nothing automatic** -- on Windows she asks you yes/no before the winsock reset (needs admin and a reboot) |
 | Internet fine, provider not answering | Nothing to fix locally; she says so |
 
 Each fix runs through the fix library's detect -> apply -> verify contract, so it builds a
-track record on this machine. Set `NET_TRIAGE=off` in `config/.env` to only report.
+track record on this machine. Set `NET_TRIAGE=off` in `config/.env` to only measure and report.
 
 **A silent provider can't freeze her.** If a model accepts a request and then goes quiet,
 she abandons it after `API_STALL_MS` (default 2 minutes, 5x for local models), tries one

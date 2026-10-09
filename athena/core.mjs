@@ -236,28 +236,14 @@ export async function turn(messages, emit, opts = {}) {
         import('./telemetry.mjs').then(({ logError }) => logError('turn_llm_call', netErr, { model: state.activeModel })).catch(() => {});
         throw netErr;
       }
-      emit({ type: 'system', text: 'Network unavailable -- offline mode (L2 engine active)' });
-      const { detectIntents, runPlan } = await import('./control_engine.mjs');
-      const lastUser = [...messages].reverse().find(m => m.role === 'user');
-      const userInput = typeof lastUser?.content === 'string' ? lastUser.content : '';
-      const intents = detectIntents(userInput);
+      // Offline (v3.4): the only job without a connection is getting it back. Once the
+      // cloud model is reachable it handles everything else, so this reply is about the
+      // network and nothing else -- no general health sweep, whatever was asked.
+      emit({ type: 'system', text: 'Offline -- network recovery mode' });
       emit({ type: 'stream_start' });
-      if (intents) {
-        const report = await runPlan(intents, emit);
-        emit({ type: 'token', content: report });
-        messages.push({ role: 'assistant', content: report });
-      } else {
-        // Offline and the phrasing did not map to a workflow. A menu is useless to
-        // someone whose machine is broken -- run the broad health sweep and say what is
-        // actually wrong, then offer the narrower checks.
-        emit({ type: 'token', content: "I'm offline -- no internet. Running a full local check instead of guessing.\n\n" });
-        let report;
-        try { report = await runPlan(['system_health', 'network_check'], emit); }
-        catch (e) { report = '(local diagnostics failed: ' + e.message + ')'; }
-        const tail = "\n\nIf that missed it, name the area: disk, network, adapter/driver, boot, processes, logs, services.";
-        emit({ type: 'token', content: report + tail });
-        messages.push({ role: 'assistant', content: report + tail });
-      }
+      const report = await offlineNetworkReport(inputHandler, emit);
+      emit({ type: 'token', content: report });
+      messages.push({ role: 'assistant', content: report });
       emit({ type: 'stream_end' });
       emit({ type: 'done' });
       if (!opts.isolated) { _turnActive = false; }
@@ -578,6 +564,61 @@ function broadcastSkill(...args) { _broadcastSkill(...args); }
 // ---- Fresh message array factory -- mode-aware ----
 export function freshMessages() {
   return [{ role: 'system', content: (isOfflineMode() || isLocalModelActive()) ? offlineSystemPrompt() : systemPrompt() }];
+}
+
+// ---- Offline reply: network only ----
+// Built from what net_triage.mjs measured during the failed call (api.mjs runs it) plus
+// the L2 network_check routine for the raw adapter data. The winsock / IP-stack reset is
+// the one repair triage never runs on its own; with no model online to ask through
+// fix_issues, it is offered here as a direct yes/no.
+async function offlineNetworkReport(ask, emit) {
+  const { lastTriage, LAYER_TEXT, stackResetFixId } = await import('./net_triage.mjs');
+  const tri = lastTriage();
+  const lines = [tri && tri.layer === 'provider'
+    ? 'The internet is working, but the AI provider is not answering -- nothing on this machine to fix.'
+    : "I'm offline, so the only thing I'm working on is getting the connection back.", ''];
+
+  if (tri && tri.layer && LAYER_TEXT[tri.layer]) {
+    lines.push('What I measured: ' + LAYER_TEXT[tri.layer] + '.');
+    const tried = (tri.steps || []).map(st => st.fixId);
+    lines.push(tried.length ? 'What I tried: ' + tried.join(', ') + ' -- the connection is still down.' : 'What I tried: nothing applied automatically.');
+    if (tri.advice) lines.push(tri.advice);
+  } else {
+    lines.push('I could not measure the network path (' + ((tri && (tri.error || tri.skipped)) || 'no triage result') + ').');
+  }
+
+  const resetId = tri && tri.layer === 'stack' ? stackResetFixId() : null;
+  if (resetId && ask) {
+    let answer = '';
+    try {
+      answer = String(await ask('Reset the Windows network stack (winsock + IP)? It needs admin, and it only takes effect after a reboot. It also removes VPN and similar network add-ons, which their installers re-add.', ['yes', 'no']) || '');
+    } catch {}
+    if (/^y/i.test(answer.trim())) {
+      try {
+        const { applyFix } = await import('./machine_fixes.mjs');
+        const res = await applyFix(resetId, { force: true });
+        lines.push('', res.message, '', res.verified
+          ? 'Restart the computer now -- the reset only takes effect after a reboot.'
+          : 'The reset did not complete. It needs Athena running as administrator -- start Athena.bat with "Run as administrator" and try again.');
+      } catch (e) {
+        lines.push('', 'The reset failed: ' + e.message);
+      }
+    } else {
+      lines.push('', 'Left the network stack alone.');
+    }
+  }
+
+  try {
+    const { runPlan } = await import('./control_engine.mjs');
+    // Progress tokens would land above this reply's first line; keep only non-token events.
+    const net = await runPlan(['network_check'], e => { if (e && e.type !== 'token') emit(e); });
+    if (net) lines.push('', net);
+  } catch (e) {
+    lines.push('', '(network check failed: ' + e.message + ')');
+  }
+
+  lines.push('', 'Send your message again once the connection is back -- everything else is handled online.');
+  return lines.join('\n');
 }
 
 // ---- L2/L3/L4 routing: turnWithFallback ----

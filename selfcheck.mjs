@@ -231,11 +231,19 @@ _resetTriageForTests();
 triRes = await triageNetwork({ host: 'api.example', platform: 'win32', deps: tri.deps });
 t('triage: broken stack is never auto-reset -- recommends winsock-reset instead',
   triRes.restored === false && tri.applied.length === 0 && /winsock-reset/.test(triRes.advice || ''), JSON.stringify({ triRes, applied: tri.applied }));
+t('triage: broken stack counts as network down (offline mode, no local fallback)', triRes.networkDown === true);
 
 tri = scripted(P({ rawReachable: true, dnsResolves: true }), P({}));
 _resetTriageForTests();
 triRes = await triageNetwork({ host: 'api.example', platform: 'win32', deps: tri.deps });
 t('triage: provider outage applies no local fix', triRes.restored === false && tri.applied.length === 0 && triRes.layer === 'provider');
+t('triage: provider outage is not "offline" (local fallback still allowed)', triRes.networkDown === false);
+
+tri = scripted(P({ rawReachable: true }), P({ hostReachable: true }));
+_resetTriageForTests();
+triRes = await triageNetwork({ host: 'api.example', platform: 'win32', deps: tri.deps, applyFixes: false });
+t('triage: NET_TRIAGE=off still diagnoses, applies nothing',
+  triRes.restored === false && tri.applied.length === 0 && triRes.layer === 'dns' && triRes.networkDown === true, JSON.stringify({ triRes, applied: tri.applied }));
 
 tri = scripted(P({ routable: 0 }), P({ hostReachable: true }));
 _resetTriageForTests();

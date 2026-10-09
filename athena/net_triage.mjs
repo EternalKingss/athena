@@ -23,6 +23,11 @@
 // failed. On "stack", triage reports what it measured and recommends it.
 //
 // Every command is async with a timeout; nothing here can block the event loop.
+//
+// Offline, this is ALL Athena does (v3.4): the only job without a connection is getting
+// the connection back. Once the cloud model is reachable it handles everything else, so
+// api.mjs does not fall back to the local model when triage says the network itself is
+// down, and core.mjs answers with the network report instead of a general health sweep.
 
 import { connect } from 'node:net';
 import { lookup } from 'node:dns/promises';
@@ -43,7 +48,7 @@ const LADDER = {
   darwin: { dns: ['dns-cache-flush-mac'] },
 };
 const STACK_RECOMMENDATION = {
-  win32: 'winsock-reset (needs admin and a reboot -- run it with fix_issues if you approve)',
+  win32: 'winsock-reset (needs admin and a reboot -- Athena asks before running it)',
   linux: 'restart NetworkManager or reboot',
   darwin: 'turn Wi-Fi off and on, or reboot',
 };
@@ -112,7 +117,16 @@ export function diagnose(p) {
   return 'stack';
 }
 
-const LAYER_TEXT = {
+// Layers that mean "this machine has no working internet" -- as opposed to 'provider',
+// where the internet is fine and only the AI service is down.
+export const NETWORK_DOWN_LAYERS = new Set(['adapter', 'dhcp', 'dns', 'stack']);
+
+// The one fix triage never runs on its own; core.mjs offers it with an explicit yes/no.
+export function stackResetFixId(platform = process.platform) {
+  return platform === 'win32' ? 'winsock-reset' : null;
+}
+
+export const LAYER_TEXT = {
   adapter:  'no network adapter has an address',
   dhcp:     'the adapter only has a self-assigned 169.254.x.x address (DHCP failed)',
   dns:      'the internet is reachable but the API hostname will not resolve (DNS)',
@@ -132,7 +146,7 @@ async function settle(host, probeFn, settleMs) {
 
 // deps lets selfcheck drive the ladder with a scripted probe and a fake applyFix, so the
 // decision logic is tested without touching a real network adapter.
-async function runTriage(host, platform, deps = {}) {
+async function runTriage(host, platform, deps = {}, { applyFixes = true } = {}) {
   const probeFn  = deps.probe || probe;
   const settleMs = deps.settleMs ?? SETTLE_MS;
   const ladder = LADDER[platform] || {};
@@ -143,6 +157,10 @@ async function runTriage(host, platform, deps = {}) {
   if (layer === 'ok') return { restored: true, alreadyOk: true, layer, steps };
 
   report('Cloud AI unreachable -- network triage: ' + LAYER_TEXT[layer] + '.');
+  if (!applyFixes) {
+    report('Automatic network fixes are off (NET_TRIAGE=off) -- reporting only.');
+    return { restored: false, layer, steps, advice: 'Automatic fixes are off.', networkDown: NETWORK_DOWN_LAYERS.has(layer) };
+  }
   const applyFix = deps.applyFix || (await import('./machine_fixes.mjs')).applyFix;
 
   for (let round = 0; round < 3; round++) {
@@ -160,7 +178,7 @@ async function runTriage(host, platform, deps = {}) {
     const next = diagnose(p);
     if (next === 'ok') {
       report('Connection restored by ' + fixId + '.');
-      return { restored: true, layer, steps };
+      return { restored: true, layer, steps, networkDown: false };
     }
     if (next !== layer) report('Now: ' + LAYER_TEXT[next] + '.');
     layer = next;
@@ -171,20 +189,26 @@ async function runTriage(host, platform, deps = {}) {
   else if (layer === 'stack') advice = 'Not fixed automatically. Next step: ' + (STACK_RECOMMENDATION[platform] || 'reboot') + '.';
   else advice = 'Automatic fixes did not restore it.';
   report('Network triage finished: ' + LAYER_TEXT[layer] + '. ' + advice);
-  return { restored: false, layer, steps, advice };
+  return { restored: false, layer, steps, advice, networkDown: NETWORK_DOWN_LAYERS.has(layer) };
 }
 
 // Entry point. Concurrent callers share one run; a finished run is cached for COOLDOWN_MS
 // so a burst of failing requests (agents, retries) triggers one triage, not ten.
-export async function triageNetwork({ host, platform = process.platform, deps } = {}) {
-  if (!NET_TRIAGE && !deps) return { restored: false, skipped: 'disabled' };
+// With NET_TRIAGE=off it still measures and diagnoses -- offline mode needs to know whether
+// the network is down -- it just applies no fixes.
+export async function triageNetwork({ host, platform = process.platform, deps, applyFixes } = {}) {
   if (!host) return { restored: false, skipped: 'no host' };
   if (_inFlight) return _inFlight;
   if (_lastResult && Date.now() - _lastRun < COOLDOWN_MS) return { ..._lastResult, cached: true };
-  _inFlight = runTriage(host, platform, deps)
+  _inFlight = runTriage(host, platform, deps, { applyFixes: applyFixes ?? (NET_TRIAGE || !!deps) })
     .catch(e => ({ restored: false, error: e.message }))
     .then(r => { _lastRun = Date.now(); _lastResult = r; _inFlight = null; return r; });
   return _inFlight;
+}
+
+// The most recent finished run (or null), for core.mjs's offline reply.
+export function lastTriage() {
+  return _lastResult ? { ..._lastResult, at: _lastRun } : null;
 }
 
 export function _resetTriageForTests() { _inFlight = null; _lastRun = 0; _lastResult = null; }

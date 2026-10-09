@@ -1,6 +1,6 @@
 {
   "name": "athena",
-  "version": "3.3.0",
+  "version": "3.4.0",
   "private": true,
   "type": "module",
   "description": "Athena -- portable AI agent OS. No npm dependencies -- plain Node.js built-ins only."
