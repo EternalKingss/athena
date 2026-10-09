@@ -2,7 +2,7 @@
 import {
   API_KEY, BASE,
   ANTHROPIC_KEY, ANTHROPIC_BASE, ANTHROPIC_VERSION,
-  CURATED_MODELS, LOCAL_LLM_PORT, isOfflineMode, state, API_STALL_MS,
+  CURATED_MODELS, LOCAL_LLM_PORT, state, API_STALL_MS,
 } from './config.mjs';
 import { triageNetwork } from './net_triage.mjs';
 
@@ -87,11 +87,10 @@ function buildFallbackList() {
       if (m !== current) result.push(m);
     }
   }
-  if (isOfflineMode()) {
-    const local  = result.filter(m => m.startsWith('local-'));
-    const others = result.filter(m => !m.startsWith('local-'));
-    return [...local, ...others];
-  }
+  // The local model is never a fallback for Claude (v3.4): it handles basic commands only
+  // (task_router.mjs), never diagnosis or fixing. It stays in the list only when the user
+  // explicitly switched to it with /model.
+  if (!String(current).startsWith('local-')) return result.filter(m => !m.startsWith('local-'));
   return result;
 }
 

@@ -48,9 +48,10 @@ anything you could type yourself, with a working directory, a timeout, and struc
 
 ## 3. Diagnose the machine
 
-Describe a symptom in your own words — she picks the routine, runs real commands, and parses
-output into numbers. "my wifi is gone" and "disk is full" both land correctly without you
-naming anything.
+Describe a symptom in your own words and Claude investigates it -- running real commands
+and the diagnostic tools as it sees fit. Nothing is pattern-matched: saying "disk scan" in
+passing does not trigger a canned routine. The routines below are what the diagnostic layer
+can measure; offline, only the network one is used (see section 15).
 
 | Routine | What she actually checks |
 |---|---|
@@ -291,10 +292,21 @@ conversation -- she works on the network and tells you exactly where it stands.
 
 | Situation | What she does |
 |---|---|
-| **Online** | Everything -- full tool surface, agents, skills. Simple mechanical jobs ("click play", "open a tab") go to the local model first to save Claude credits |
-| **Credits or rate limit exhausted** (internet fine) | Falls back to the local model if one is installed |
-| **AI provider down** (internet fine) | Tries the other models, then the local model; tells you it's the provider, not you |
-| **No internet** | Network recovery only: measures the link, applies the safe fixes, retries. If still down, replies with what she measured, what she tried, and the live adapter data. No local-model fallback |
+| **Online** | Everything goes to Claude. Only basic commands -- volume, media, browser tabs -- go to the local model first to save credits; anything about fixing or diagnosing never does |
+| **Credits or rate limit exhausted** (internet fine) | Tells you so. No local-model fallback -- the local model doesn't fix things |
+| **AI provider down** (internet fine) | Tries the other Claude models, then tells you it's the provider, not you |
+| **No internet** | Wi-Fi / network recovery only, all hard-coded (below). If still down, replies with what she measured, what she tried, what you need to do, and the live adapter data |
+
+**Every way she knows Wi-Fi can break, and what she does about it:**
+
+| Measured | Windows | Linux | macOS |
+|---|---|---|---|
+| Sign-in page (hotel, airport, cafe) | Tells you to open a site and sign in | same | same |
+| WLAN AutoConfig service stopped | Starts it (needs admin) | -- | -- |
+| Wi-Fi adapter disabled | Enables it (needs admin) | Radio on + connect | -- |
+| Wi-Fi radio off / airplane mode | Tells you: Wi-Fi button, Fn key, airplane mode | Turns the radio on | Turns Wi-Fi power on |
+| Not connected to any network | Rejoins a saved network that's in range | Reconnects through NetworkManager | Tells you |
+| No saved network in range | Names your saved networks, says none are in range | same | same |
 
 **The rule that still binds them:** whatever the control engine measures is fact. A model can
 explain the findings, but cannot overrule a measurement. That's why she doesn't tell you the
