@@ -44,6 +44,7 @@ async function getAccessToken() {
       client_secret: GOOGLE_CLIENT_SECRET,
       grant_type: 'refresh_token',
     }),
+    signal: AbortSignal.timeout(30000),
   });
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) {
@@ -64,6 +65,7 @@ async function googleFetch(url, opts = {}) {
   const resp = await fetch(url, {
     ...opts,
     headers: { ...(opts.headers || {}), Authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(30000),
   });
   const text = await resp.text();
   let json;

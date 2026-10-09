@@ -61,15 +61,22 @@ export function submitCommand(action, args = {}, { timeoutMs = DEFAULT_TIMEOUT_M
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       inFlight.delete(id);
-      reject(new Error(
-        `browser relay: no response from the extension for "${action}" within ${timeoutMs}ms ` +
-        `(is the extension installed, connected, and Chrome running?)`
+      // A command nobody picked up must not stay queued: the extension would otherwise
+      // run it whenever it next polls -- a click or navigation firing minutes after the
+      // model was told it failed.
+      const queued = pendingQueue.indexOf(command);
+      if (queued !== -1) pendingQueue.splice(queued, 1);
+      reject(new Error(command.dispatchedAt
+        ? `browser relay: the extension took "${action}" but did not finish it within ${timeoutMs}ms ` +
+          `(the page may be unresponsive -- check the tab, then retry or try a different element)`
+        : `browser relay: no response from the extension for "${action}" within ${timeoutMs}ms ` +
+          `(is the extension installed, connected, and Chrome running?)`
       ));
     }, timeoutMs);
     inFlight.set(id, { resolve, reject, timer, command });
 
     const waiter = waitingPollers.shift();
-    if (waiter) waiter(command);
+    if (waiter) { command.dispatchedAt = Date.now(); waiter(command); }
     else pendingQueue.push(command);
   });
 }
@@ -77,7 +84,7 @@ export function submitCommand(action, args = {}, { timeoutMs = DEFAULT_TIMEOUT_M
 function handlePoll(req, res, url) {
   extensionLastSeen = Date.now();
   const next = pendingQueue.shift();
-  if (next) { send(res, 200, { command: next }); return; }
+  if (next) { next.dispatchedAt = Date.now(); send(res, 200, { command: next }); return; }
 
   const wantsWait = url.searchParams.get('wait') === '1';
   if (!wantsWait) { send(res, 200, { command: null }); return; }

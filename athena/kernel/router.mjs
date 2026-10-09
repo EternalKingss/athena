@@ -21,6 +21,20 @@ import { findCapabilityOwner, isHealthy } from './registry.mjs';
 import { makeEnvelope } from './contract.mjs';
 
 const AUDIT_MAX = 500;
+
+// Last-resort deadline for any module capability. Each module is expected to bound its own
+// work (the browser relay times out at 15-20s, Google calls at 30s), so this only fires if
+// one of them has a bug. It cannot cancel the module's work -- a promise has no cancel --
+// but it gives the turn its answer back so the agent loop keeps moving.
+const MODULE_DEADLINE_MS = 120_000;
+
+function withDeadline(promise, ms, capability) {
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`"${capability}" did not finish within ${Math.round(ms / 1000)}s and was abandoned`)), ms);
+  });
+  return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
+}
 const auditLog = [];
 
 function record(envelope) {
@@ -46,7 +60,9 @@ export async function dispatch(capability, args, ctx = {}) {
   const capDef = mod.capabilities.find(c => c.name === capability);
   let result;
   try {
-    result = await mod.execute(capability, args, ctx);
+    result = mod.name === 'system'
+      ? await mod.execute(capability, args, ctx)   // system tools carry their own per-command timeouts, some deliberately long
+      : await withDeadline(Promise.resolve().then(() => mod.execute(capability, args, ctx)), MODULE_DEADLINE_MS, capability);
   } catch (e) {
     result = 'Error: ' + e.message;
   }

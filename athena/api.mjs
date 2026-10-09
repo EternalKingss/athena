@@ -2,8 +2,9 @@
 import {
   API_KEY, BASE,
   ANTHROPIC_KEY, ANTHROPIC_BASE, ANTHROPIC_VERSION,
-  CURATED_MODELS, LOCAL_LLM_PORT, isOfflineMode, state,
+  CURATED_MODELS, LOCAL_LLM_PORT, isOfflineMode, state, API_STALL_MS,
 } from './config.mjs';
+import { triageNetwork } from './net_triage.mjs';
 
 // ---- Model-switch broadcast callback (set by ui.mjs) ----
 let _onModelSwitch = null;
@@ -202,6 +203,98 @@ function markCacheBreakpoint(msgs) {
   return msgs;
 }
 
+// ---- Stall protection ----
+// fetch() has no timeout of its own, and Node's defaults let a connection that accepted
+// the request but never answers sit for five minutes per read -- multiplied across up to
+// eight failover attempts. That is the "turn silently hangs, no error, no tool call"
+// failure. Every provider call now has a deadline for the response headers and, when
+// streaming, an idle deadline between chunks. Hitting either aborts the request with a
+// `stalled` error, which chatStream()/chat() treat as "this model is not answering, try
+// the next one" -- not as "the machine is offline". Only MAX_STALL_FAILOVERS models are
+// tried after a stall: a provider that hangs usually hangs for every model it serves, and
+// eight sequential stall windows would just be a slower hang.
+const MAX_STALL_FAILOVERS = 2;
+function stallMsFor(model) {
+  return String(model || '').startsWith('local-') ? API_STALL_MS * 5 : API_STALL_MS;
+}
+
+function stallError(model, ms, phase) {
+  const e = new Error('API stalled: "' + model + '" sent no ' + phase + ' for ' + Math.round(ms / 1000) + 's');
+  e.stalled = true;
+  return e;
+}
+
+// fetch() with an abort deadline that covers connecting and waiting for headers. The
+// returned response carries the controller so the body reader can abort the same request.
+async function timedFetch(url, init, model) {
+  const ms  = stallMsFor(model);
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(stallError(model, ms, 'response')), ms);
+  try {
+    const res = await fetch(url, { ...init, signal: ctl.signal });
+    res._athenaAbort = ctl;
+    return res;
+  } catch (e) {
+    if (ctl.signal.aborted && ctl.signal.reason && ctl.signal.reason.stalled) throw ctl.signal.reason;
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Non-streaming: one deadline for the whole exchange, headers and body together.
+async function timedJson(url, init, model) {
+  const ms  = stallMsFor(model) * 2;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(stallError(model, ms, 'complete response')), ms);
+  try {
+    const res = await fetch(url, { ...init, signal: ctl.signal });
+    const text = await res.text();
+    return { res, text };
+  } catch (e) {
+    if (ctl.signal.aborted && ctl.signal.reason && ctl.signal.reason.stalled) throw ctl.signal.reason;
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// reader.read() with an idle deadline. The timer is always cleared, so a finished read
+// never leaves a pending timeout holding the event loop.
+async function readWithIdle(reader, res, model) {
+  const ms = stallMsFor(model);
+  let timer;
+  try {
+    return await Promise.race([
+      reader.read(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          const err = stallError(model, ms, 'stream data');
+          // Reject BEFORE cancelling: cancel() settles the pending read() as { done: true }
+          // synchronously, and if that wins the race the stall reads as a normal end of
+          // stream -- a half-finished reply presented as complete.
+          reject(err);
+          try { res._athenaAbort && res._athenaAbort.abort(err); } catch {}
+          reader.cancel(err).catch(() => {});
+        }, ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Runs network triage at most once per chat()/chatStream() call, and only for a cloud
+// model -- a local model being unreachable says nothing about the network.
+async function tryNetworkTriage(base, model) {
+  if (String(model).startsWith('local-')) return false;
+  let host = '';
+  try { host = new URL(base).hostname; } catch {}
+  if (!host || host === '127.0.0.1' || host === 'localhost') return false;
+  try { return (await triageNetwork({ host })).restored === true; }
+  catch { return false; }
+}
+
 // ---- HTTP helpers ----
 const RETRYABLE = new Set([429, 502, 503, 504]);
 // Quota/auth errors trigger model failover
@@ -287,13 +380,13 @@ async function withRetry(fn, maxAttempts = 3) {
 
 // ---- Single-shot (non-streaming) ----
 export async function chat(messages, opts = {}) {
-  let modelAttempts = 0, connFailures = 0;
+  let modelAttempts = 0, connFailures = 0, stallFailures = 0, triaged = false;
   while (modelAttempts < 8) {
     const { provider, base, key, model } = pickModel(opts.model);
     try {
       return await withRetry(async () => {
         if (provider === 'anthropic') {
-          const res = await fetch(base + '/messages', {
+          const { res, text } = await timedJson(base + '/messages', {
             method: 'POST',
             headers: {
               'Content-Type':      'application/json',
@@ -306,32 +399,36 @@ export async function chat(messages, opts = {}) {
               system:   toAnthropicSystem(messages),
               messages: markCacheBreakpoint(toAnthropicMessages(messages)),
             }),
-          });
+          }, model);
           if (!res.ok) {
             // Failure accounting happens once, in the outer catch. Recording it here too
             // meant one rate-limited request counted ~4 times against MODEL_FAIL_MAX=2,
             // so a single 429 blocked the model for the full 15-minute window.
-            const t = await res.text();
-            throw mkHttpError(res.status, t, res);
+            throw mkHttpError(res.status, text, res);
           }
-          const data = await res.json();
+          const data = JSON.parse(text);
           return { role: 'assistant', content: data.content?.find(b => b.type === 'text')?.text || '' };
         }
-        const res = await fetch(base + '/chat/completions', {
+        const { res, text } = await timedJson(base + '/chat/completions', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key },
           body: JSON.stringify({ model, messages }),
-        });
-        if (!res.ok) {
-          const t = await res.text();
-          throw mkHttpError(res.status, t, res);
-        }
-        const data = await res.json();
+        }, model);
+        if (!res.ok) throw mkHttpError(res.status, text, res);
+        const data = JSON.parse(text);
         return data.choices?.[0]?.message ?? { role: 'assistant', content: '' };
       });
     } catch (err) {
       const conn = isConnError(err);
       if (conn && model.startsWith('local-') && await ensureLocalUp(model)) continue;  // started it; retry same model
+      if (conn && !triaged) { triaged = true; if (await tryNetworkTriage(base, model)) continue; }  // network fixed; retry same model
+      if (err.stalled) {
+        recordModelFailure(model);
+        stallFailures++;
+        modelAttempts++;
+        if (stallFailures >= MAX_STALL_FAILOVERS) break;
+        continue;
+      }
       if (FAILOVER_TRIGGERS.has(err.status) || conn) {
         if (CREDIT_TRIGGERS.has(err.status)) blockProvider(model);
         else recordModelFailure(model);
@@ -347,25 +444,45 @@ export async function chat(messages, opts = {}) {
   // and core.mjs decides which of those to say by matching on the message.
   throw new Error(connFailures >= modelAttempts
     ? 'All models unreachable (fetch failed) -- no route to any provider.'
-    : 'All models exhausted -- check your API keys and quota.');
+    : (stallFailures >= MAX_STALL_FAILOVERS || stallFailures >= modelAttempts)
+      ? 'All models stalled -- every provider accepted the request and then stopped responding.'
+      : 'All models exhausted -- check your API keys and quota.');
 }
 
 // ---- Streaming generator ----
 export async function* chatStream(messages, tools, opts = {}) {
-  let modelAttempts = 0, connFailures = 0;
+  let modelAttempts = 0, connFailures = 0, stallFailures = 0, triaged = false;
   while (modelAttempts < 8) {
     const { provider, base, key, model } = pickModel(opts.model);
+    let yielded = false;
     try {
-      if (provider === 'anthropic') {
-        yield* claudeStream(messages, tools, base, key, model);
-      } else {
-        yield* openaiStream(messages, tools, base, key, model);
-      }
+      const gen = provider === 'anthropic'
+        ? claudeStream(messages, tools, base, key, model)
+        : openaiStream(messages, tools, base, key, model);
+      for await (const chunk of gen) { yielded = true; yield chunk; }
       return;
     } catch (err) {
       const conn = isConnError(err);
       if (conn && model.startsWith('local-') && await ensureLocalUp(model)) {
         console.warn('[api:failover] started local model "' + model + '" -- retrying');
+        continue;
+      }
+      if (conn && !yielded && !triaged) {
+        triaged = true;
+        if (await tryNetworkTriage(base, model)) {
+          console.warn('[api:failover] network restored -- retrying "' + model + '"');
+          continue;
+        }
+      }
+      if (err.stalled) {
+        recordModelFailure(model);
+        // Half a reply is already on screen; replaying the turn on another model would
+        // duplicate it. Surface the stall instead and let the user retry.
+        if (yielded) throw err;
+        stallFailures++;
+        modelAttempts++;
+        if (stallFailures >= MAX_STALL_FAILOVERS) break;
+        console.warn('[api:failover] ' + err.message + ' -- trying next model');
         continue;
       }
       if (FAILOVER_TRIGGERS.has(err.status) || conn) {
@@ -382,7 +499,9 @@ export async function* chatStream(messages, tools, opts = {}) {
   }
   throw new Error(connFailures >= modelAttempts
     ? 'All models unreachable (fetch failed) -- no route to any provider.'
-    : 'All models exhausted for streaming.');
+    : (stallFailures >= MAX_STALL_FAILOVERS || stallFailures >= modelAttempts)
+      ? 'All models stalled -- every provider accepted the request and then stopped responding.'
+      : 'All models exhausted for streaming.');
 }
 
 // ---- OpenAI streaming ----
@@ -390,20 +509,20 @@ async function* openaiStream(messages, tools, base, key, model) {
   const res = await withRetry(async () => {
     const body = { model, messages, stream: true };
     if (tools?.length) { body.tools = tools; body.tool_choice = 'auto'; }
-    let r = await fetch(base + '/chat/completions', {
+    let r = await timedFetch(base + '/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key },
       body: JSON.stringify(body),
-    });
+    }, model);
     if (!r.ok) {
       const errText = await r.text();
       if (r.status === 400 && /tool|function/i.test(errText)) {
         const body2 = { model, messages, stream: true };
-        r = await fetch(base + '/chat/completions', {
+        r = await timedFetch(base + '/chat/completions', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key },
           body: JSON.stringify(body2),
-        });
+        }, model);
         if (!r.ok) throw mkHttpError(r.status, await r.text(), r);
         return r;
       }
@@ -416,7 +535,7 @@ async function* openaiStream(messages, tools, base, key, model) {
   const dec    = new TextDecoder();
   let buf = '';
   while (true) {
-    const { done, value } = await reader.read();
+    const { done, value } = await readWithIdle(reader, res, model);
     if (done) break;
     buf += dec.decode(value, { stream: true });
     const lines = buf.split('\n');
@@ -443,7 +562,7 @@ async function* claudeStream(messages, tools, base, key, model) {
   if (anthropicTools?.length) body.tools = anthropicTools;
 
   const res = await withRetry(async () => {
-    const r = await fetch(base + '/messages', {
+    const r = await timedFetch(base + '/messages', {
       method: 'POST',
       headers: {
         'Content-Type':      'application/json',
@@ -451,7 +570,7 @@ async function* claudeStream(messages, tools, base, key, model) {
         'anthropic-version': ANTHROPIC_VERSION,
       },
       body: JSON.stringify(body),
-    });
+    }, model);
     if (!r.ok) throw mkHttpError(r.status, await r.text(), r);
     return r;
   });
@@ -463,7 +582,7 @@ async function* claudeStream(messages, tools, base, key, model) {
   let toolCallIndex  = -1;
 
   while (true) {
-    const { done, value } = await reader.read();
+    const { done, value } = await readWithIdle(reader, res, model);
     if (done) break;
     buf += dec.decode(value, { stream: true });
     const lines = buf.split('\n');
@@ -515,6 +634,7 @@ export async function generateEmbedding(text) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + API_KEY },
     body: JSON.stringify({ model: 'text-embedding-3-small', input: text }),
+    signal: AbortSignal.timeout(30000),
   });
   if (!res.ok) throw new Error('Embedding API ' + res.status + ': ' + await res.text());
   const data = await res.json();

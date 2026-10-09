@@ -242,6 +242,15 @@ export const FIX_LIBRARY = [
     explain: 'Clears the resolver cache.',
   },
   {
+    id: 'network-restart-linux', platform: LIN, risk: 'medium', tags: ['network', 'adapter', 'dhcp'],
+    title: 'Restart networking through NetworkManager',
+    symptom: 'no default route -- the adapter is down or never got a DHCP lease',
+    detect: { cmd: 'ip route show default 2>/dev/null | grep -c default', expect: '^0' },
+    steps:  ['nmcli networking off', 'nmcli networking on', 'sleep 8'],
+    verify: { cmd: 'ip route show default 2>/dev/null | grep -c default', expect: '^[1-9]' },
+    explain: 'Takes every NetworkManager connection down and back up, which re-runs DHCP. Briefly drops the connection. Needs NetworkManager (most desktop distros).',
+  },
+  {
     id: 'journal-vacuum', platform: LIN, risk: 'low', tags: ['disk', 'space', 'logs'],
     title: 'Vacuum systemd journal logs older than 7 days',
     symptom: 'root filesystem low on space with a large journal',

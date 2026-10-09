@@ -311,6 +311,25 @@ why she doesn't tell you the Wi-Fi is broken when the data says 144 Mbps at zero
 This is what makes a network fault something she can *fix* rather than something that
 *disables* her.
 
+**She repairs her own connection first.** When the cloud model can't be reached, before
+falling back to anything she measures where the link is broken and fixes the layer that
+failed, then retries the same request:
+
+| Measured | Fix applied automatically |
+|---|---|
+| No adapter has an address | Restart the adapter (Windows) / NetworkManager (Linux) |
+| Only a 169.254.x.x address | DHCP release and renew |
+| Internet reachable, API name won't resolve | Flush the DNS cache |
+| Address fine, nothing reachable | **Nothing** -- recommends the winsock reset, which needs a reboot and your approval |
+| Internet fine, provider not answering | Nothing to fix locally; she says so |
+
+Each fix runs through the fix library's detect -> apply -> verify contract, so it builds a
+track record on this machine. Set `NET_TRIAGE=off` in `config/.env` to only report.
+
+**A silent provider can't freeze her.** If a model accepts a request and then goes quiet,
+she abandons it after `API_STALL_MS` (default 2 minutes, 5x for local models), tries one
+more model, and then tells you the provider stalled -- instead of hanging the turn.
+
 ---
 
 ## 16. Machine control
