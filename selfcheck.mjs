@@ -187,6 +187,74 @@ const unknownResult = await kernel.dispatch('does_not_exist_capability', {});
 t('unknown capability returns a clean error string, not a throw',
   unknownResult === 'Error: no module registered for capability "does_not_exist_capability"');
 
+// ---- v3.3: network triage (net_triage.mjs) -- decision logic, no real adapters touched ----
+const { diagnose, triageNetwork, _resetTriageForTests } = await import('./athena/net_triage.mjs');
+const P = (o) => ({ host: 'api.example', routable: 1, apipa: 0, hostReachable: false, rawReachable: false, dnsResolves: false, ...o });
+t('triage diagnoses each layer',
+  diagnose(P({ hostReachable: true })) === 'ok' &&
+  diagnose(P({ routable: 0 })) === 'adapter' &&
+  diagnose(P({ routable: 0, apipa: 1 })) === 'dhcp' &&
+  diagnose(P({ rawReachable: true })) === 'dns' &&
+  diagnose(P({ rawReachable: true, dnsResolves: true })) === 'provider' &&
+  diagnose(P({})) === 'stack');
+
+// Scripted probe: returns `before` until a fix has been applied, then `after`.
+function scripted(before, after) {
+  const st = { applied: [] };
+  st.deps = {
+    settleMs: 0,
+    probe: async () => (st.applied.length ? after : before),
+    applyFix: async (id) => { st.applied.push(id); return { ok: true }; },
+  };
+  return st;
+}
+let tri = scripted(P({ routable: 0 }), P({ hostReachable: true }));
+_resetTriageForTests();
+let triRes = await triageNetwork({ host: 'api.example', platform: 'win32', deps: tri.deps });
+t('triage: adapter down on Windows -> adapter-bounce, restored',
+  triRes.restored === true && tri.applied.join() === 'adapter-bounce', JSON.stringify({ triRes, applied: tri.applied }));
+
+tri = scripted(P({ rawReachable: true }), P({ hostReachable: true }));
+_resetTriageForTests();
+triRes = await triageNetwork({ host: 'api.example', platform: 'linux', deps: tri.deps });
+t('triage: DNS failure on Linux -> dns-cache-flush-linux, restored',
+  triRes.restored === true && tri.applied.join() === 'dns-cache-flush-linux', JSON.stringify({ triRes, applied: tri.applied }));
+
+tri = scripted(P({ routable: 0, apipa: 1 }), P({ routable: 0, apipa: 1 }));
+_resetTriageForTests();
+triRes = await triageNetwork({ host: 'api.example', platform: 'win32', deps: tri.deps });
+t('triage: DHCP renew that does not help is tried once, then stops',
+  triRes.restored === false && tri.applied.join() === 'dhcp-renew', JSON.stringify({ triRes, applied: tri.applied }));
+
+tri = scripted(P({}), P({}));
+_resetTriageForTests();
+triRes = await triageNetwork({ host: 'api.example', platform: 'win32', deps: tri.deps });
+t('triage: broken stack is never auto-reset -- recommends winsock-reset instead',
+  triRes.restored === false && tri.applied.length === 0 && /winsock-reset/.test(triRes.advice || ''), JSON.stringify({ triRes, applied: tri.applied }));
+
+tri = scripted(P({ rawReachable: true, dnsResolves: true }), P({}));
+_resetTriageForTests();
+triRes = await triageNetwork({ host: 'api.example', platform: 'win32', deps: tri.deps });
+t('triage: provider outage applies no local fix', triRes.restored === false && tri.applied.length === 0 && triRes.layer === 'provider');
+
+tri = scripted(P({ routable: 0 }), P({ hostReachable: true }));
+_resetTriageForTests();
+const [triA, triB] = await Promise.all([
+  triageNetwork({ host: 'api.example', platform: 'win32', deps: tri.deps }),
+  triageNetwork({ host: 'api.example', platform: 'win32', deps: tri.deps }),
+]);
+t('triage: concurrent failures share one run (one fix applied, not two)',
+  triA.restored && triB.restored && tri.applied.length === 1, tri.applied.join());
+_resetTriageForTests();
+
+// ---- v3.3: browser relay must drop a command that timed out before the extension took it ----
+const { submitCommand } = await import('./athena/modules/browser/relay.mjs');
+let relayErr = null;
+try { await submitCommand('browser_click', { text: 'stale' }, { timeoutMs: 50 }); } catch (e) { relayErr = e; }
+const afterTimeout = await fetch(relayBase + '/poll').then(r => r.json());
+t('browser relay: timed-out command is not delivered to the extension later',
+  relayErr !== null && afterTimeout.command === null, JSON.stringify(afterTimeout));
+
 let threwContractViolation = false;
 try { registerModule({ name: 'malformed-test-module' }); } // missing capabilities + execute
 catch (e) { threwContractViolation = e instanceof ContractViolation; }

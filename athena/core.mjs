@@ -1,5 +1,6 @@
 ﻿// core.mjs -- turn loop, task runner, context compression
 import { chat, chatStream } from './api.mjs';
+import { setTriageReporter } from './net_triage.mjs';
 import { classifyRisk, previewCall, irreversibleReason } from './tools.mjs';
 import { dispatch } from './kernel/router.mjs';
 import { toolsForModel } from './kernel/toolSurface.mjs';
@@ -161,6 +162,9 @@ export async function turn(messages, emit, opts = {}) {
     const toolCallMap = {};
     let hasTools = false;
 
+    // Network triage (net_triage.mjs) runs inside chatStream when the cloud is unreachable;
+    // route its progress into this turn so the user sees what is being repaired.
+    if (!opts.isolated) setTriageReporter(text => emit({ type: 'system', text }));
     try {
     for await (const chunk of chatStream(messages, toolsForModel(state.activeModel))) {
       const delta = chunk.choices?.[0]?.delta;
@@ -212,6 +216,16 @@ export async function turn(messages, emit, opts = {}) {
         } catch {}
         import('./telemetry.mjs').then(({ logError }) => logError('models_exhausted', netErr, { model: state.activeModel })).catch(() => {});
         emit({ type: 'error', message: 'Every cloud model refused (rate limit, quota, or credits). You are NOT offline. ' + hint });
+        emit({ type: 'done' });
+        if (!opts.isolated) { _turnActive = false; }
+        return;
+      }
+      // A provider that accepted the request and then went silent is not an outage either.
+      // api.mjs abandons it after API_STALL_MS instead of hanging the turn.
+      if (netErr.stalled || (netErr.message && netErr.message.includes('stalled'))) {
+        import('./telemetry.mjs').then(({ logError }) => logError('api_stalled', netErr, { model: state.activeModel })).catch(() => {});
+        if (textContent) emit({ type: 'stream_end' });
+        emit({ type: 'error', message: 'The AI provider stopped responding (' + netErr.message + '). You are NOT offline -- send the message again, or switch model with /model.' });
         emit({ type: 'done' });
         if (!opts.isolated) { _turnActive = false; }
         return;

@@ -91,6 +91,15 @@ export const BROWSER_RELAY_PORT = Number(CFG.BROWSER_RELAY_PORT) || 17861;
 // choice and the heavy one is deliberate.
 export const LOCAL_MODEL_PREF = (CFG.LOCAL_MODEL || '').trim();
 
+// net_triage.mjs -- set NET_TRIAGE=off to stop Athena repairing the network on her own
+// when the cloud model is unreachable. On by default.
+export const NET_TRIAGE = !/^(off|false|0|no)$/i.test(String(CFG.NET_TRIAGE || '').trim());
+
+// api.mjs -- how long a cloud model may go silent (no response headers, or no new stream
+// data) before the request is abandoned and the next model is tried. Local models get 5x,
+// since a CPU-bound llama.cpp can take minutes to process a long prompt.
+export const API_STALL_MS = Math.max(15000, Number(CFG.API_STALL_MS) || 120000);
+
 // modules/google.mjs (Module 3, phase 2) -- Gmail + Calendar via one OAuth app/refresh token.
 // Minted once with google_oauth_setup.mjs (repo root); scopes are read + compose (never send)
 // for Gmail, read + create/update for Calendar -- see docs/MODULE3_PLAN.md Section 1. All three
