@@ -2,7 +2,9 @@
 
 ## What this is
 Portable AI agent that runs from a USB/HDD drive. Zero npm dependencies. Node.js ES modules only.
-Browser UI served locally. Calls external LLM APIs (OpenAI, Anthropic) — does NOT run local models.
+Browser UI served locally. Claude (Anthropic API) does all reasoning, diagnosis and fixing. An optional small local model
+(llama.cpp) handles basic commands only -- volume, media, browser tabs -- and is never a fallback for Claude.
+Offline, the only job is restoring the connection: hard-coded Wi-Fi/network triage in `net_triage.mjs`.
 
 ## Key constraints
 - **No npm / no node_modules** — everything is vanilla Node.js built-ins + dynamic `import()` for stdlib
@@ -36,6 +38,13 @@ athena/
   triage.mjs       -- task triage / prioritization
   remediate.mjs    -- auto-remediation
   embed.mjs        -- embeddings
+  net_triage.mjs   -- offline Wi-Fi/network triage (the only offline behaviour)
+  task_router.mjs  -- routes basic commands to the local model; fixing always goes to Claude
+  agent_loop.mjs   -- bounded tool loop used by the local model
+  kernel/          -- module registry, router (approval enforced here for modules), daemon
+  modules/         -- system.mjs (Module 1), browser.mjs + browser/relay.mjs (Module 2), google.mjs (Module 3)
+
+extension/         -- Chrome extension (Module 2); talks to the relay on 127.0.0.1:17861
 
 skills/            -- each skill is a folder with SKILL.md
   system-health/
@@ -55,7 +64,7 @@ config/
 
 runtime/           -- Node.js binary lives here (not committed, downloaded on first run)
 
-regression.mjs     -- regression test suite (55 tests)
+selfcheck.mjs      -- test suite (run from the Athena root; skips checks that need your data/Google login)
 ```
 
 ## Architecture: tiered autonomy
@@ -94,11 +103,12 @@ await saveSkill(name, description, content, 'unverified'); // auto-crystallized
 await saveSkill(name, description, content, 'verified');   // manual
 ```
 
-## Running regression tests
+## Running the tests
 ```bash
-node regression.mjs
+node selfcheck.mjs
 ```
-55 tests covering tiered autonomy, crystallization, CORAL, skill trust chain, watcher, instincts.
+Covers tiered autonomy and approval enforcement, shell risk classification, network triage, stall protection,
+the browser relay, skill trust chain, routing, and a live boot. Every PR must leave it at 0 failed.
 
 ## What NOT to do
 - Do not use `npm install` or introduce package.json dependencies

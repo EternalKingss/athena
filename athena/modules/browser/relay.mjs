@@ -148,9 +148,26 @@ function handleStatus(req, res) {
   });
 }
 
+// Only the extension may talk to the relay. Two things kept everyone else out of nothing:
+//  - listen() had no host, so the relay was on every interface -- anyone on the same
+//    Wi-Fi could poll queued commands (including text Athena types into pages) and post
+//    fake results back.
+//  - any web page open in the browser could do the same with a no-cors fetch or an <img>.
+// Measured in Chromium with this extension loaded: the extension's requests carry
+// Sec-Fetch-Site "none" and no web Origin; a page's carry "cross-site" (and an Origin on
+// POST). So: loopback only, and refuse anything a web page could have sent.
+export function isTrustedRelayRequest(headers = {}) {
+  const origin = headers.origin;
+  if (origin && !String(origin).startsWith('chrome-extension://')) return false;
+  const site = headers['sec-fetch-site'];
+  if (site && site !== 'none' && site !== 'same-origin') return false;
+  return true;
+}
+
 export function startRelay({ port } = {}) {
   if (server) return server;
   server = createServer((req, res) => {
+    if (!isTrustedRelayRequest(req.headers)) { send(res, 403, { error: 'forbidden' }); return; }
     const url = new URL(req.url, 'http://127.0.0.1');
     if (req.method === 'GET' && url.pathname === '/poll')   { handlePoll(req, res, url); return; }
     if (req.method === 'POST' && url.pathname === '/result') { handleResult(req, res); return; }
@@ -164,7 +181,7 @@ export function startRelay({ port } = {}) {
     console.error('[browser relay] failed to start:', err.message);
     server = null;
   });
-  server.listen(port);
+  server.listen(port, '127.0.0.1');
   // Scripts like selfcheck.mjs that boot the kernel and expect to exit on
   // their own shouldn't be kept alive by this listener alone -- the live
   // CLI/UI process has its own refed handles (readline, its own servers)

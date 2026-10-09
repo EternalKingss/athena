@@ -466,6 +466,9 @@ export async function* chatStream(messages, tools, opts = {}) {
   let modelAttempts = 0, connFailures = 0, stallFailures = 0, triaged = false;
   while (modelAttempts < 8) {
     const { provider, base, key, model } = pickModel(opts.model);
+    if (opts.strictModel && opts.model && model !== opts.model) {
+      throw new Error('model "' + opts.model + '" is unavailable (strict -- no failover to "' + model + '")');
+    }
     let yielded = false;
     try {
       const gen = provider === 'anthropic'

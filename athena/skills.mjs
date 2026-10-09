@@ -6,9 +6,17 @@ import { writeFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { PATHS } from './paths.mjs';
 
+// A skill name becomes a directory under skills/. Without this, "../x" reached outside
+// it -- reading, or (via save/update/rollback) overwriting, any SKILL.md on the drive.
+export function validSkillName(name) {
+  const n = String(name || '');
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(n) && !n.includes('..');
+}
+const BAD_NAME = name => 'Invalid skill name "' + String(name).slice(0, 80) + '" -- use letters, digits, ".", "_" or "-".';
+
 // ---- Get skill verification status ----
 export function getSkillStatus(name) {
-  if (!name) return null;
+  if (!name || !validSkillName(name)) return null;
   const mdPath = join(PATHS.skills, name, 'SKILL.md');
   if (!existsSync(mdPath)) return null;
   try {
@@ -39,6 +47,7 @@ export function scanSkills() {
 
 // ---- Load a skill's full instructions ----
 export function loadSkill(name) {
+  if (!validSkillName(name)) return BAD_NAME(name);
   const mdPath = join(PATHS.skills, name, 'SKILL.md');
   if (!existsSync(mdPath)) return 'Skill "' + name + '" not found.';
   return readFileSync(mdPath, 'utf8');
@@ -84,6 +93,7 @@ async function backupCurrentSkill(name) {
 
 // ---- Save a new skill ----
 export async function saveSkill(name, description, content, status) {
+  if (!validSkillName(name)) return BAD_NAME(name);
   // Default to UNVERIFIED. This defaulted to 'verified', and tools.mjs calls it with
   // three arguments -- so anything that wrote a skill minted itself a trusted,
   // permanently-loaded instruction file with no approval anywhere in the path. Trust
@@ -109,6 +119,7 @@ export async function saveSkill(name, description, content, status) {
 
 // ---- Update an existing skill ----
 export async function updateSkill(name, description, content, status) {
+  if (!validSkillName(name)) return BAD_NAME(name);
   if (status === undefined) status = 'unverified';
   const mdPath = join(PATHS.skills, name, 'SKILL.md');
   if (!existsSync(mdPath)) return 'Skill "' + name + '" not found -- use save_skill to create it.';
@@ -129,6 +140,7 @@ export async function updateSkill(name, description, content, status) {
 
 // ---- Roll back to a prior version ----
 export async function rollbackSkill(name, version) {
+  if (!validSkillName(name)) return BAD_NAME(name);
   const versionPath = join(PATHS.skills, name, 'versions', 'v' + version + '.md');
   if (!existsSync(versionPath)) return 'Version v' + version + ' not found for skill "' + name + '".';
   // Back up what we are about to overwrite -- rolling back used to destroy the current
@@ -141,6 +153,7 @@ export async function rollbackSkill(name, version) {
 
 // ---- List available versions for a skill ----
 export function listSkillVersions(name) {
+  if (!validSkillName(name)) return [];
   const versionsDir = join(PATHS.skills, name, 'versions');
   if (!existsSync(versionsDir)) return [];
   return readdirSync(versionsDir)
@@ -151,6 +164,7 @@ export function listSkillVersions(name) {
 
 // ---- Update skill stats (success/failure counters) ----
 export function recordSkillResult(name, success) {
+  if (!validSkillName(name)) return;
   const metaPath = join(PATHS.skills, name, 'meta.json');
   try {
     let meta = {};

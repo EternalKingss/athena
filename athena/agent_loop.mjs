@@ -25,6 +25,9 @@ import { loadFingerprint } from './machines.mjs';
 // before a failure, so a caller can show partial progress even on failure.
 export async function runBoundedAgentLoop({ model, systemPrompt, task, maxSteps = 6 }) {
   const tools = toolsForModel(model);
+  // A model can name a tool it was never offered; for the local model that would reach
+  // write or fix tools it is deliberately not given. Only offered tools ever run.
+  const offered = new Set(tools.map(t => t.function && t.function.name));
   const machineProfile = loadFingerprint();
   const messages = [
     { role: 'system', content: systemPrompt },
@@ -39,7 +42,9 @@ export async function runBoundedAgentLoop({ model, systemPrompt, task, maxSteps 
     const toolCallMap = {};
 
     try {
-      for await (const chunk of chatStream(messages, tools, { model })) {
+      // strictModel: if this model is unavailable, fail -- never quietly continue on a
+      // different (cloud) model while reporting the work as done locally.
+      for await (const chunk of chatStream(messages, tools, { model, strictModel: true })) {
         const delta = chunk.choices?.[0]?.delta;
         if (!delta) continue;
         if (delta.content) textContent += delta.content;
@@ -83,6 +88,12 @@ export async function runBoundedAgentLoop({ model, systemPrompt, task, maxSteps 
       let parsedArgs = {};
       try { parsedArgs = JSON.parse(tc.args || '{}'); } catch {}
 
+      if (!offered.has(tc.name)) {
+        return {
+          ok: false, model, actionsExecuted,
+          failureReason: `called "${tc.name}", a tool it was not given`,
+        };
+      }
       const risk = classifyRisk(tc.name, parsedArgs, machineProfile);
       const badReason = irreversibleReason(tc.name, parsedArgs);
       if (risk.tier >= 2 || badReason) {

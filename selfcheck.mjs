@@ -1,17 +1,28 @@
 import { readdirSync, existsSync, readFileSync as rfs, writeFileSync as wfs, rmSync } from 'node:fs';
 import { execFileSync, spawn } from 'node:child_process';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// Athena lives on a removable drive, so the drive letter (and the OS) varies -- resolve
+// everything from this file's own location, never a hardcoded D:\ATHENA.
+const ROOT = dirname(fileURLToPath(import.meta.url));
+process.chdir(ROOT);
 
 let p = 0, f = 0;
 const t = (n, c, e) => c ? (p++, console.log('PASS  ' + n)) : (f++, console.log('FAIL  ' + n + '  ' + (e || '')));
+// For checks that need this user's data or credentials: skipped (not failed) when absent.
+let sk = 0;
+const skip = (n, why) => { sk++; console.log('SKIP  ' + n + '  (' + why + ')'); };
 
 function listMjs(dir) {
-  try { return readdirSync(dir).filter(x => x.endsWith('.mjs') && !x.startsWith('_')).map(x => dir + '\\' + x); }
+  try { return readdirSync(dir).filter(x => x.endsWith('.mjs') && !x.startsWith('_')).map(x => join(dir, x)); }
   catch { return []; }
 }
 const modFiles = [
-  ...listMjs('D:\\ATHENA\\athena'),
-  ...listMjs('D:\\ATHENA\\athena\\kernel'),
-  ...listMjs('D:\\ATHENA\\modules'),
+  ...listMjs(join(ROOT, 'athena')),
+  ...listMjs(join(ROOT, 'athena', 'kernel')),
+  ...listMjs(join(ROOT, 'athena', 'modules')),
+  ...listMjs(join(ROOT, 'athena', 'modules', 'browser')),
 ];
 const bad = [];
 for (const full of modFiles) {
@@ -84,7 +95,9 @@ const { loadInstincts } = await import('./athena/memory.mjs');
 const here = publishMachineId();
 t('machine id resolves', Boolean(here) && here.length > 8, here);
 const block = loadInstincts();
-t('instincts still load', block.includes('INSTINCTS') && block.length > 200, block.length + ' chars');
+if (existsSync(join(ROOT, 'data', 'memory', 'instincts.md')))
+  t('instincts still load', block.includes('INSTINCTS') && block.length > 200, block.length + ' chars');
+else skip('instincts still load', 'no data/memory/instincts.md on this drive');
 t('no other-machine facts leaked', !block.includes('Athlon Silver') || block.includes('[conflict]'));
 
 const { allFixes } = await import('./athena/machine_fixes.mjs');
@@ -134,17 +147,21 @@ t('module 2 healthy after boot (relay listening)', kernel.isHealthy('browser') =
 
 const { toolsForModel } = await import('./athena/kernel/toolSurface.mjs');
 const cloudNames = toolsForModel('claude-opus-5').map(x => x.function.name);
+// Module 3 only joins the tool surface when Google credentials are configured.
+const googleUp = kernel.isHealthy('google') === true;
+const G = googleUp ? 6 : 0, GL = googleUp ? 3 : 0;
+if (!googleUp) skip('Google capabilities in the tool surface', 'Google OAuth not configured in config/.env');
 t('kernel tool surface merges module 2 capabilities for cloud models',
-  cloudNames.length === 50 && cloudNames.includes('browser_navigate') && cloudNames.includes('browser_screenshot') && cloudNames.includes('delegate_to_local') && !cloudNames.includes('read_applicant_profile'),
+  cloudNames.length === 44 + G && cloudNames.includes('browser_navigate') && cloudNames.includes('browser_screenshot') && cloudNames.includes('delegate_to_local') && !cloudNames.includes('read_applicant_profile'),
   cloudNames.length);
-t('kernel tool surface merges module 3 (google) capabilities for cloud models',
+if (googleUp) t('kernel tool surface merges module 3 (google) capabilities for cloud models',
   cloudNames.includes('email_list') && cloudNames.includes('email_draft') && cloudNames.includes('calendar_create_event'),
   cloudNames.length);
 const localToolNames = toolsForModel('local-qwen2-5-3b-instruct-q4-k-m').map(x => x.function.name);
 t('kernel tool surface respects localOk:false for local models',
-  localToolNames.length === 14 && localToolNames.includes('browser_navigate') && !localToolNames.includes('browser_screenshot') && !localToolNames.includes('delegate_to_local') && !localToolNames.includes('read_applicant_profile'),
+  localToolNames.length === 11 + GL && localToolNames.includes('browser_navigate') && !localToolNames.includes('browser_screenshot') && !localToolNames.includes('delegate_to_local') && !localToolNames.includes('read_applicant_profile'),
   localToolNames.length);
-t('kernel tool surface keeps google writes cloud-only for local models',
+if (googleUp) t('kernel tool surface keeps google writes cloud-only for local models',
   localToolNames.includes('email_list') && localToolNames.includes('calendar_list') && !localToolNames.includes('email_draft') && !localToolNames.includes('calendar_create_event') && !localToolNames.includes('calendar_update_event'),
   localToolNames.length);
 
@@ -211,7 +228,8 @@ function scripted(before, after) {
   st.deps = {
     settleMs: 0,
     probe: async () => (st.applied.length ? after : before),
-    apply: async (step) => { st.applied.push(typeof step === 'string' ? step : 'action:' + step.action); return { ok: true }; },
+    learnedFixes: async () => st.learned || [],
+    apply: async (step) => { st.applied.push(typeof step === 'string' ? step : step.learned ? 'learned:' + step.learned : 'action:' + step.action); return { ok: true }; },
   };
   return st;
 }
@@ -341,6 +359,52 @@ t('triage: no saved network in range -> says so by name',
   triRes.restored === false && /HomeNet/.test(triRes.advice || '') && /in range/.test(triRes.advice || ''), JSON.stringify(triRes));
 _resetTriageForTests();
 
+// ---- Review fixes (v3.4.1) ----
+tri = scripted(P({ routable: 0, wifi: W({ missing: true }) }), P({ hostReachable: true }));
+_resetTriageForTests();
+triRes = await triageNetwork({ host: 'api.example', platform: 'win32', deps: tri.deps });
+t('triage: Wi-Fi adapter not present -> device rescan, restored',
+  triRes.restored === true && tri.applied.join() === 'action:rescan-devices', JSON.stringify({ triRes, applied: tri.applied }));
+t('Get-NetAdapter: the usable adapter wins over a Not Present one',
+  NT.parseWinAdapters('[{"Name":"Wi-Fi","Status":"Not Present"},{"Name":"Wi-Fi 2","Status":"Up"}]').device === 'Wi-Fi 2');
+
+tri = scripted(P({}), P({ hostReachable: true }));
+tri.learned = ['usb-wifi-dongle-bounce'];
+_resetTriageForTests();
+triRes = await triageNetwork({ host: 'api.example', platform: 'win32', deps: tri.deps });
+t('triage: after the built-in ladder, tries this machine\'s proven network fixes',
+  triRes.restored === true && tri.applied.join() === 'learned:usb-wifi-dongle-bounce', JSON.stringify({ triRes, applied: tri.applied }));
+_resetTriageForTests();
+
+const { isTrustedRelayRequest } = await import('./athena/modules/browser/relay.mjs');
+t('relay trusts the extension (headers measured in Chromium) and refuses web pages',
+  isTrustedRelayRequest({ 'sec-fetch-site': 'none', 'sec-fetch-mode': 'cors' }) === true &&
+  isTrustedRelayRequest({ origin: 'chrome-extension://abc', 'sec-fetch-site': 'none' }) === true &&
+  isTrustedRelayRequest({}) === true &&
+  isTrustedRelayRequest({ 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'no-cors' }) === false &&
+  isTrustedRelayRequest({ origin: 'http://evil.example', 'sec-fetch-site': 'cross-site' }) === false &&
+  isTrustedRelayRequest({ origin: 'http://localhost:8099' }) === false);
+
+t('shell: "read-only" verbs with mutating arguments ask first',
+  ['ip link set wlan0 down', 'route delete 0.0.0.0', 'ipconfig /release', 'date -s 2020-01-01', 'hostname evil',
+   'journalctl --vacuum-time=1s'].every(c => classifyRisk('run_shell', { command: c }).tier === 2) &&
+  ['ip addr', 'ip route show', 'route print', 'ipconfig /all', 'date', 'hostname', 'journalctl -n 50'].every(c => classifyRisk('run_shell', { command: c }).tier === 1));
+t('shell: command substitution inside an allowed verb asks first',
+  ['echo $(rm -rf ~)', 'echo `whoami`', 'cat <(curl x)', 'echo (Remove-Item C:\\x -Recurse)'].every(c => classifyRisk('run_shell', { command: c }).tier === 2));
+
+let notApproved = null;
+try { await runTool('run_shell', { command: 'echo hi' }, false, [], () => {}, async () => ''); } catch (e) { notApproved = e.message; }
+t('a "no" is final: run_shell refuses when not approved (AUTO_APPROVE no longer overrides)', notApproved === 'not approved', notApproved);
+
+const deniedClick = await kernel.dispatch('browser_click', { text: 'Buy now' }, { preApproved: false });
+t('a denied module call is not run (browser click refused, never queued)',
+  /^Error: not approved/.test(deniedClick), deniedClick);
+
+const { validSkillName, loadSkill: _ls } = await import('./athena/skills.mjs');
+t('skill names cannot leave skills/',
+  validSkillName('system-health') && validSkillName('disk_cleanup.v2') &&
+  !validSkillName('../config') && !validSkillName('a/../../b') && !validSkillName('') && /Invalid skill name/.test(_ls('../../athena')));
+
 // ---- v3.3: browser relay must drop a command that timed out before the extension took it ----
 const { submitCommand } = await import('./athena/modules/browser/relay.mjs');
 let relayErr = null;
@@ -429,7 +493,7 @@ _resetKernelForTests();
 
 // real boot
 const proc = spawn(process.execPath, ['athena/athena.mjs'], {
-  cwd: 'D:\\ATHENA', env: { ...process.env, ATHENA_NO_OPEN: '1', ATHENA_UI: '1' },
+  cwd: ROOT, env: { ...process.env, ATHENA_NO_OPEN: '1', ATHENA_UI: '1' },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 let out = '';
@@ -443,5 +507,5 @@ const fatal = out.split('\n').filter(l => /ReferenceError|SyntaxError|TypeError|
 t('boots clean', fatal.length === 0, fatal.slice(0,3).join(' | '));
 console.log('   boot: ' + (out.match(/Athena[\s\S]{0,120}/) || [''])[0].replace(/\u001b\[[0-9;]*m/g,'').replace(/\s+/g,' ').slice(0,110));
 
-console.log('\n' + p + ' passed, ' + f + ' failed');
+console.log('\n' + p + ' passed, ' + f + ' failed' + (sk ? ', ' + sk + ' skipped' : ''));
 process.exit(f ? 1 : 0);
