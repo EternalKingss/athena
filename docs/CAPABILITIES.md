@@ -291,7 +291,7 @@ The part most assistants don't have. Three levels of intelligence that degrade i
    L4 Cloud            L3 Local model         L2 Control engine
    ---------           --------------         -----------------
    Claude.             Runs on your GPU.      Measures and repairs
-   36 tools, agents,   Talks, reasons,        with no model at all.
+   50 tools, agents,   Talks, reasons,        with no model at all.
    skills.             calls 8 tools.
         |                     |                       |
         +--credits gone------>+--no net / no GPU----->+- this floor never
@@ -325,6 +325,45 @@ Through the Windows bridge she also drives the machine directly:
   and poll it for live output while doing something else
 
 > say: *start the build in the background and tell me when it finishes*
+
+---
+
+## 17. Your real Chrome
+
+A small extension (`extension/`, load unpacked in Chrome) lets her act inside your actual,
+signed-in Chrome -- not a separate automation browser. She works in her own tab and never
+touches the tab you're looking at unless you hand her one.
+
+| Tool | Does |
+|---|---|
+| `browser_navigate` | Opens a URL in her working tab (or a tab you name) |
+| `browser_click` / `browser_type` | Clicks an element by selector or visible text; types into a field |
+| `browser_read_text` | Reads the visible text of a page |
+| `browser_screenshot` | Captures a tab |
+| `browser_list_tabs` / `browser_status` | Lists open tabs; reports whether the extension is connected |
+
+Clicks that move money -- place order, buy now, book now, checkout -- always stop for your
+approval, even with auto-approve on.
+
+> say: *open the weather for Edmonton and tell me if it'll rain tomorrow*
+
+---
+
+## 18. Gmail and Calendar
+
+Connected through your own Google account (one-time setup with `google_oauth_setup.mjs`).
+
+| Tool | Does |
+|---|---|
+| `email_list` / `email_read` | Lists and reads mail, with Gmail search syntax (`is:unread`, `from:...`) |
+| `email_draft` | Writes a draft or a threaded reply -- **never sends**; Google never granted her send permission |
+| `calendar_list` | Upcoming events, any of your calendars |
+| `calendar_create_event` / `calendar_update_event` | Adds or changes events |
+
+Reading and calendar changes run on their own; nothing leaves your outbox without you
+pressing send. The Google sign-in expires every 7 days -- re-run the setup script to renew it.
+
+> say: *anything unread from today that needs a reply? draft the replies*
 
 ---
 
