@@ -32,7 +32,7 @@ const CAP_DEFS = [
   },
   {
     name: 'browser_click',
-    description: 'Click an element on the page, identified by a CSS selector or its visible text.',
+    description: 'Click an element on the page, identified by a CSS selector or its visible text. Media (play buttons) in the background Athena tab may not start until the user switches to that tab -- that is the Chrome autoplay rule, not a failed click. Click play once, do not retry, and tell the user to switch to the tab.',
     parameters: {
       type: 'object',
       properties: {
