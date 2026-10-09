@@ -3,6 +3,7 @@ import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { getCachedCapabilities } from './capabilities.mjs';
 import { firewallState, avState, fail2banState } from './sysstate.mjs';
+import { getListeningPorts } from './ports.mjs';
 
 const execAsync = promisify(exec);
 const isWin = process.platform === 'win32';
@@ -25,21 +26,6 @@ function riskLevel(score) {
   if (score >= 60) return 'HIGH';
   if (score >= 30) return 'MEDIUM';
   return 'LOW';
-}
-
-async function getListeningPorts() {
-  let out = '';
-  if (isWin) {
-    out = await probe('netstat -an 2>nul | findstr LISTENING', 'ports');
-  } else {
-    out = await probe('ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null', 'ports');
-  }
-  return out.split('\n')
-    .filter(l => isWin ? Boolean(l.trim()) : l.includes('LISTEN'))
-    .map(l => { const m = l.match(/:(\d+)\s/); return m ? Number(m[1]) : null; })
-    .filter(Boolean)
-    .filter((v, i, a) => a.indexOf(v) === i)
-    .sort((a, b) => a - b);
 }
 
 async function getUnusualSUID() {

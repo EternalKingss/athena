@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { promisify } from 'node:util';
 import { networkInterfaces } from 'node:os';
 import { getCachedCapabilities } from './capabilities.mjs';
+import { getListeningPorts } from './ports.mjs';
 
 const execAsync = promisify(exec);
 const isWin = process.platform === 'win32';
@@ -49,22 +50,6 @@ async function getDNSServers() {
     }
   }
   return [];
-}
-
-async function getListeningPorts() {
-  let out = '';
-  if (isWin) {
-    out = await probe('netstat -an 2>nul | findstr LISTENING', 'ports');
-  } else {
-    out = await probe('ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null', 'ports');
-  }
-  const ports = out.split('\n')
-    .filter(l => isWin ? Boolean(l) : l.includes('LISTEN'))
-    .map(l => { const m = l.match(/:(\d+)\s/); return m ? Number(m[1]) : null; })
-    .filter(Boolean)
-    .filter((v, i, a) => a.indexOf(v) === i)
-    .sort((a, b) => a - b);
-  return ports;
 }
 
 export async function getSituationalAwareness() {

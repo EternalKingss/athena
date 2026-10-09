@@ -8,6 +8,8 @@ import { chat } from './api.mjs';
 import { embedAndStore, extractTags } from './embed.mjs';
 import { runMemoryGC } from './memory_gc.mjs';
 import { logError } from './telemetry.mjs';
+import { DELIM, readEntries } from './memory_entries.mjs';
+export { readEntries };
 
 // ---- Session file pruning -- keeps last 60 days, max 100 files ----
 export async function pruneOldSessions() {
@@ -43,7 +45,7 @@ async function pruneSummary() {
   } catch { /* non-fatal */ }
 }
 
-const DELIM = '\n\x15\n';
+
 
 // One file per session, not one per turn. saveAndSummarize runs after every turn and
 // minted a fresh ISO-timestamped filename each time, so a 30-turn session left 30 files
@@ -53,12 +55,6 @@ const DELIM = '\n\x15\n';
 const SESSION_ID = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -1);
 
 // ---- Memory file helpers ----
-export function readEntries(file) {
-  if (!existsSync(file)) return [];
-  const raw = readFileSync(file, 'utf8').trim();
-  return raw ? raw.split(DELIM).map(e => e.trim()).filter(Boolean) : [];
-}
-
 async function writeEntries(file, entries) {
   await writeFile(file, entries.join(DELIM));
 }

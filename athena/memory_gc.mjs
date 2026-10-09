@@ -6,15 +6,9 @@ import { writeFile, appendFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { PATHS } from './paths.mjs';
 import { logError } from './telemetry.mjs';
+import { DELIM, readEntries } from './memory_entries.mjs';
 
 // Avoid circular import with memory.mjs by duplicating the tiny entry reader.
-const DELIM = '\n\x15\n';
-function readEntries(file) {
-  if (!existsSync(file)) return [];
-  const raw = readFileSync(file, 'utf8').trim();
-  return raw ? raw.split(DELIM).map(e => e.trim()).filter(Boolean) : [];
-}
-
 // ---- Word-overlap similarity (Jaccard) ----
 function wordSet(text) {
   return new Set(
