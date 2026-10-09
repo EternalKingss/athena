@@ -631,20 +631,16 @@ export function toolsForModel(model) {
 // browser_click, so this pattern is the one place that boundary has to hold even if an
 // agent_loop task or a prompt bug tries to click through it anyway.
 //
-// Job application submission is explicitly NOT gated here, on direct instruction: job-board
-// and ATS "submit application" clicks are meant to fire on their own, no approval, same as
-// any other tier-1 action. Only actions that move money (a purchase, a booking) or that
-// would actually send an email (moot right now -- modules/google.mjs's OAuth app was never
-// granted gmail.send, so there's no code path that could send one) get the approval gate.
+// Job application submission is gated too (v3.2, auto-apply removed on direct instruction):
+// Athena can still search, read, and fill out an application, but the final "submit
+// application" click is tier 2 and flagged irreversible, same as a purchase -- an
+// application, once sent, can't be pulled back. Email stays moot: modules/google.mjs's
+// OAuth app was never granted gmail.send, so there's no code path that could send one.
 // This is a text-match heuristic on the clicked element and can be wrong in either
 // direction -- a bare "Submit" with no other cue is genuinely ambiguous. PURCHASE_LIKE is
-// checked first and wins on any overlap, because a false "let it through" on a real payment
-// is a worse failure than one on a job application.
+// checked first only so the approval prompt names the right kind of action.
 const PURCHASE_LIKE = /\b(place order|buy now|pay now|book now|confirm (order|purchase|payment|booking)|complete (purchase|order|booking|checkout)|checkout|finalize (order|booking))\b/i;
-// Named only so tool_start/approval logs read clearly -- matching this does NOT change the
-// tier. Anything that doesn't match PURCHASE_LIKE is already tier 1 by default; this just
-// gives job-application clicks a reason string that says so explicitly instead of the
-// generic "clicks an element on the page".
+// Job-application submit controls -- tier 2 and irreversible, see the comment above.
 const JOB_APPLY_LIKE = /\b(submit application|submit my application|apply now|apply for this job|easy apply|send application|finalize application)\b/i;
 
 const IRREVERSIBLE = [
@@ -676,11 +672,12 @@ export function irreversibleReason(name, args) {
   // a purchase/checkout control is exactly as irreversible as anything else in this list
   // once it fires (money moves). Checked here on name rather than folded into IRREVERSIBLE,
   // because the target text lives in args.selector/args.text, not
-  // args.command/content/steps. Job-application submits are deliberately NOT checked here
-  // -- see PURCHASE_LIKE's comment above.
+  // args.command/content/steps. Job-application submits are checked here too, so the gate
+  // holds under AUTO_APPROVE -- see PURCHASE_LIKE's comment above.
   if (name === 'browser_click') {
     const target = [a.selector, a.text].filter(Boolean).join(' ');
     if (PURCHASE_LIKE.test(target)) return 'clicks a purchase/checkout control ("' + target.slice(0, 60) + '")';
+    if (JOB_APPLY_LIKE.test(target)) return 'submits a job application ("' + target.slice(0, 60) + '")';
   }
 
   // apply_fix and fix_issues name a stored fix by id -- the commands live in the fix store
@@ -866,7 +863,7 @@ export function classifyRisk(name, args, machineProfile) {
     if (PURCHASE_LIKE.test(target))
       return { tier: 2, reason: 'clicks a purchase/checkout control -- confirm before this goes out' };
     if (JOB_APPLY_LIKE.test(target))
-      return { tier: 1, reason: 'job-application submit -- auto-actionable, no approval required per instruction' };
+      return { tier: 2, reason: 'submits a job application -- confirm before this goes out' };
     return { tier: 1, reason: 'clicks an element on the page' };
   }
 

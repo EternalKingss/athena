@@ -63,13 +63,13 @@ t('chained destructive tier 2', classifyRisk('run_shell',{command:'ls && Remove-
 t('chained read-only tier 1', classifyRisk('run_shell',{command:'ls && pwd'}).tier === 1);
 t('apply_fix gate sees stored steps', irreversibleReason('apply_fix',{id:'clear-windows-update-cache'}) !== null);
 
-// Module 3 phase 3 (job search & apply) ships no job_application_submit tool at all --
-// job-application submits are explicitly auto-actionable (no approval), only
-// purchase/checkout clicks are gated. See tools.mjs's PURCHASE_LIKE/JOB_APPLY_LIKE comment.
-t('browser_click job-apply submit stays tier 1 (auto-actionable)',
-  classifyRisk('browser_click', {text:'Submit Application'}).tier === 1 && classifyRisk('browser_click', {text:'Apply Now'}).tier === 1);
-t('browser_click job-apply submit not irreversible',
-  irreversibleReason('browser_click', {text:'Submit Application'}) === null && irreversibleReason('browser_click', {text:'Apply Now'}) === null);
+// Module 3 phase 3 (job search & apply) ships no job_application_submit tool at all, and
+// auto-apply is removed (v3.2): job-application submit clicks are tier 2 and irreversible,
+// same as purchase/checkout clicks. See tools.mjs's PURCHASE_LIKE/JOB_APPLY_LIKE comment.
+t('browser_click job-apply submit tier 2 (no auto-apply)',
+  classifyRisk('browser_click', {text:'Submit Application'}).tier === 2 && classifyRisk('browser_click', {text:'Apply Now'}).tier === 2);
+t('browser_click job-apply submit irreversible',
+  irreversibleReason('browser_click', {text:'Submit Application'}) !== null && irreversibleReason('browser_click', {text:'Apply Now'}) !== null);
 t('browser_click purchase-like tier 2',
   classifyRisk('browser_click', {text:'Place Order'}).tier === 2 && classifyRisk('browser_click', {text:'Buy Now'}).tier === 2);
 t('browser_click purchase-like irreversible', irreversibleReason('browser_click', {text:'Complete Purchase'}) !== null);

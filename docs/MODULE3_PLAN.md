@@ -26,7 +26,7 @@ Athena and can't be quietly undone.
 | Read email, read calendar, read a job posting, search flights | Unrestricted. Reading is free. |
 | Add a calendar event | Auto-actionable. Reversible with one click (delete event), same spirit as the existing tier-0/1 tools. |
 | Draft a reply, fill a document | Auto-actionable, but the *output* is a draft/local file -- never sent or finalized. |
-| Submit a job application through a web form (Indeed, a company ATS, a career page) | **Auto-actionable, no approval** -- revised 2026-09-10 on direct instruction. Skips any employer that matches your current or past work history (see below). |
+| Submit a job application through a web form (Indeed, a company ATS, a career page) | **Approval required (tier 2)** -- auto-apply removed in v3.2 on direct instruction. Athena can search, read and fill out the form; the final submit click waits for your yes. Skips any employer that matches your current or past work history (see below). |
 | Apply to a job found some other way (e.g. via a Google search that turns up a posting with no online form, just a contact to email) | Auto-actionable up to a draft. The email itself is never sent, the same way any other email draft isn't -- not a special case for job applications, just the one existing rule below. |
 | Complete a purchase or booking (checkout, pay, place an order, book a flight) | Requires your explicit go-ahead, every time, with the actual details shown -- no `AUTO_APPROVE` bypass, ever. |
 
@@ -166,6 +166,14 @@ verified live: Athena calls the tool, extracts the real resume text, and produce
 accurate (non-fabricated) summary of it. Phase 2 (modules/google.mjs) is next, and
 needs the Google Cloud OAuth setup from Section 3 before it can do anything real.
 
+
+## v3.2 -- auto-apply removed
+
+Job-application submit clicks (`JOB_APPLY_LIKE`) are now tier 2 and flagged by
+`irreversibleReason`, the same treatment as `PURCHASE_LIKE` -- so the gate holds even under
+`AUTO_APPROVE`. Searching, reading postings, filling forms and drafting application emails are
+unchanged; only the final submit waits for approval. This supersedes the v2 behavior described
+below, which is kept as history.
 
 ## Phase 3 status (job search & apply) -- auto-submit built and verified live, revised 2026-09-10
 
