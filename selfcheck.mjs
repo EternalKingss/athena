@@ -42,6 +42,9 @@ const ROUTER_BASIC = [
   'list the open tabs',
   'navigate to gmail.com',
   'type my email into the search bar',
+  'turn the volume up',
+  'mute',
+  'pause the music',
 ];
 t(ROUTER_BASIC.length + ' router candidates look basic (would try local first)',
   ROUTER_BASIC.every(s => looksBasic(s)), ROUTER_BASIC.filter(s => !looksBasic(s)).join(' | '));
@@ -51,6 +54,10 @@ const ROUTER_NOT_BASIC = [
   'should i use react or vue for this project, weighing the tradeoffs',
   'can you analyze this contract and tell me if the arbitration clause is normal',
   'hey',
+  // v3.4: diagnosing and fixing never go to the local model, however short
+  'run a disk scan',
+  'fix my wifi',
+  'click repair on the error dialog',
 ];
 t(ROUTER_NOT_BASIC.length + ' router non-candidates stay with Claude',
   ROUTER_NOT_BASIC.every(s => !looksBasic(s)), ROUTER_NOT_BASIC.filter(s => looksBasic(s)).join(' | '));
@@ -135,7 +142,7 @@ t('kernel tool surface merges module 3 (google) capabilities for cloud models',
   cloudNames.length);
 const localToolNames = toolsForModel('local-qwen2-5-3b-instruct-q4-k-m').map(x => x.function.name);
 t('kernel tool surface respects localOk:false for local models',
-  localToolNames.length === 17 && localToolNames.includes('browser_navigate') && !localToolNames.includes('browser_screenshot') && !localToolNames.includes('delegate_to_local') && !localToolNames.includes('read_applicant_profile'),
+  localToolNames.length === 14 && localToolNames.includes('browser_navigate') && !localToolNames.includes('browser_screenshot') && !localToolNames.includes('delegate_to_local') && !localToolNames.includes('read_applicant_profile'),
   localToolNames.length);
 t('kernel tool surface keeps google writes cloud-only for local models',
   localToolNames.includes('email_list') && localToolNames.includes('calendar_list') && !localToolNames.includes('email_draft') && !localToolNames.includes('calendar_create_event') && !localToolNames.includes('calendar_update_event'),
@@ -204,7 +211,7 @@ function scripted(before, after) {
   st.deps = {
     settleMs: 0,
     probe: async () => (st.applied.length ? after : before),
-    applyFix: async (id) => { st.applied.push(id); return { ok: true }; },
+    apply: async (step) => { st.applied.push(typeof step === 'string' ? step : 'action:' + step.action); return { ok: true }; },
   };
   return st;
 }
@@ -231,11 +238,19 @@ _resetTriageForTests();
 triRes = await triageNetwork({ host: 'api.example', platform: 'win32', deps: tri.deps });
 t('triage: broken stack is never auto-reset -- recommends winsock-reset instead',
   triRes.restored === false && tri.applied.length === 0 && /winsock-reset/.test(triRes.advice || ''), JSON.stringify({ triRes, applied: tri.applied }));
+t('triage: broken stack counts as network down (offline mode, no local fallback)', triRes.networkDown === true);
 
 tri = scripted(P({ rawReachable: true, dnsResolves: true }), P({}));
 _resetTriageForTests();
 triRes = await triageNetwork({ host: 'api.example', platform: 'win32', deps: tri.deps });
 t('triage: provider outage applies no local fix', triRes.restored === false && tri.applied.length === 0 && triRes.layer === 'provider');
+t('triage: provider outage is not "offline" (local fallback still allowed)', triRes.networkDown === false);
+
+tri = scripted(P({ rawReachable: true }), P({ hostReachable: true }));
+_resetTriageForTests();
+triRes = await triageNetwork({ host: 'api.example', platform: 'win32', deps: tri.deps, applyFixes: false });
+t('triage: NET_TRIAGE=off still diagnoses, applies nothing',
+  triRes.restored === false && tri.applied.length === 0 && triRes.layer === 'dns' && triRes.networkDown === true, JSON.stringify({ triRes, applied: tri.applied }));
 
 tri = scripted(P({ routable: 0 }), P({ hostReachable: true }));
 _resetTriageForTests();
@@ -245,6 +260,85 @@ const [triA, triB] = await Promise.all([
 ]);
 t('triage: concurrent failures share one run (one fix applied, not two)',
   triA.restored && triB.restored && tri.applied.length === 1, tri.applied.join());
+_resetTriageForTests();
+
+// ---- v3.4: Wi-Fi layers -- parsers on real-format output, then the ladder ----
+const NT = await import('./athena/net_triage.mjs');
+const NETSH_CONNECTED = [
+  'There is 1 interface on the system:', '',
+  '    Name                   : Wi-Fi',
+  '    Description            : Intel(R) Wi-Fi 6 AX201 160MHz',
+  '    State                  : connected',
+  '    SSID                   : HomeNet',
+  '    Signal                 : 24%',
+  '    Radio status           : Hardware On',
+  '                             Software On', ''].join('\r\n');
+const NETSH_RADIO_OFF = NETSH_CONNECTED.replace('State                  : connected', 'State                  : disconnected').replace('Software On', 'Software Off');
+const ifc = NT.parseNetshInterfaces(NETSH_CONNECTED);
+const ifcOff = NT.parseNetshInterfaces(NETSH_RADIO_OFF);
+t('netsh interfaces parse (state, SSID, signal, radio)',
+  ifc.connected === true && ifc.ssid === 'HomeNet' && ifc.signal === 24 && ifc.radioOff === false &&
+  ifcOff.connected === false && ifcOff.radioOff === true, JSON.stringify({ ifc, ifcOff }));
+t('netsh reports a stopped WLAN service',
+  NT.parseNetshInterfaces('The Wireless AutoConfig Service (wlansvc) is not running.').serviceStopped === true);
+t('netsh profiles and networks parse',
+  NT.parseNetshProfiles('User profiles\r\n-------------\r\n    All User Profile     : HomeNet\r\n    All User Profile     : Cafe & Co\r\n').join('|') === 'HomeNet|Cafe & Co' &&
+  NT.parseNetshNetworks('SSID 1 : Neighbour\r\n    Network type : Infrastructure\r\nSSID 2 : HomeNet\r\n').join('|') === 'Neighbour|HomeNet');
+t('Get-NetAdapter JSON parse (single object and array)',
+  NT.parseWinAdapters('{"Name":"Wi-Fi","Status":"Disabled"}').status === 'Disabled' &&
+  NT.parseWinAdapters('[{"Name":"Wi-Fi 2","Status":"Up"}]').device === 'Wi-Fi 2' && NT.parseWinAdapters('') === null);
+t('nmcli device/connection parse (escaped colons)',
+  NT.parseNmDevices('ethernet:unavailable:eth0:\nwifi:disconnected:wlp2s0:\n').device === 'wlp2s0' &&
+  NT.parseNmConnections('Wired:802-3-ethernet\nCafe\\: Guest:802-11-wireless\n').join() === 'Cafe: Guest');
+t('reconnect candidates = saved networks in range, saved order',
+  NT.reconnectCandidates({ known: ['A', 'B', 'C'], inRange: ['C', 'X', 'A'] }).join() === 'A,C' &&
+  NT.reconnectCandidates({ known: ['A'], inRange: ['X'] }).length === 0 &&
+  NT.reconnectCandidates({ known: ['A', 'B'], inRange: [] }).join() === 'A,B');
+
+t('portal check: only redirect / 200 / 511 count as a sign-in page, not proxy errors',
+  NT.classifyPortalStatus(204) === false && NT.classifyPortalStatus(302) === true && NT.classifyPortalStatus(200) === true &&
+  NT.classifyPortalStatus(511) === true && NT.classifyPortalStatus(403) === null && NT.classifyPortalStatus(407) === null && NT.classifyPortalStatus(502) === null);
+const W = (o) => ({ present: true, device: 'Wi-Fi', connected: false, radioOff: false, disabled: false, known: ['HomeNet'], inRange: ['HomeNet'], ...o });
+t('triage diagnoses the Wi-Fi layers',
+  NT.diagnose(P({ routable: 0, wifi: W({ serviceStopped: true }) })) === 'wifi-service' &&
+  NT.diagnose(P({ routable: 0, wifi: W({ disabled: true }) })) === 'wifi-disabled' &&
+  NT.diagnose(P({ routable: 0, wifi: W({ radioOff: true }) })) === 'wifi-radio-off' &&
+  NT.diagnose(P({ routable: 0, wifi: W({}) })) === 'wifi-disconnected' &&
+  NT.diagnose(P({ routable: 0, apipa: 1, wifi: W({ connected: true }) })) === 'dhcp' &&
+  NT.diagnose(P({ captive: true, hostReachable: true })) === 'captive');
+t('Wi-Fi off on a machine with working Ethernet is not a Wi-Fi problem',
+  NT.diagnose(P({ routable: 1, wifi: W({ radioOff: true }) })) === 'stack' &&
+  NT.diagnose(P({ routable: 1, hostReachable: true, wifi: W({ radioOff: true }) })) === 'ok');
+
+tri = scripted(P({ routable: 0, wifi: W({}) }), P({ hostReachable: true }));
+_resetTriageForTests();
+triRes = await triageNetwork({ host: 'api.example', platform: 'win32', deps: tri.deps });
+t('triage: Wi-Fi disconnected on Windows -> rejoin saved network, restored',
+  triRes.restored === true && tri.applied.join() === 'action:connect-known-wifi', JSON.stringify({ triRes, applied: tri.applied }));
+
+tri = scripted(P({ routable: 0, wifi: W({ radioOff: true }) }), P({}));
+_resetTriageForTests();
+triRes = await triageNetwork({ host: 'api.example', platform: 'win32', deps: tri.deps });
+t('triage: Wi-Fi radio off on Windows -> no command exists, tells the user how',
+  triRes.restored === false && tri.applied.length === 0 && /airplane mode/.test(triRes.advice || '') && triRes.networkDown === true, JSON.stringify({ triRes, applied: tri.applied }));
+
+tri = scripted(P({ routable: 0, wifi: W({ radioOff: true }) }), P({ hostReachable: true }));
+_resetTriageForTests();
+triRes = await triageNetwork({ host: 'api.example', platform: 'linux', deps: tri.deps });
+t('triage: Wi-Fi radio off on Linux -> nmcli radio on, restored',
+  triRes.restored === true && tri.applied.join() === 'action:nm-radio-on', JSON.stringify({ triRes, applied: tri.applied }));
+
+tri = scripted(P({ captive: true, rawReachable: true, dnsResolves: true }), P({ hostReachable: true }));
+_resetTriageForTests();
+triRes = await triageNetwork({ host: 'api.example', platform: 'win32', deps: tri.deps });
+t('triage: captive portal -> no fix, tells the user to sign in',
+  triRes.restored === false && tri.applied.length === 0 && triRes.layer === 'captive' && /sign-in/.test(triRes.advice || ''), JSON.stringify({ triRes, applied: tri.applied }));
+
+tri = scripted(P({ routable: 0, wifi: W({ known: ['HomeNet'], inRange: ['Neighbour'] }) }), P({ routable: 0, wifi: W({ known: ['HomeNet'], inRange: ['Neighbour'] }) }));
+_resetTriageForTests();
+triRes = await triageNetwork({ host: 'api.example', platform: 'win32', deps: tri.deps });
+t('triage: no saved network in range -> says so by name',
+  triRes.restored === false && /HomeNet/.test(triRes.advice || '') && /in range/.test(triRes.advice || ''), JSON.stringify(triRes));
 _resetTriageForTests();
 
 // ---- v3.3: browser relay must drop a command that timed out before the extension took it ----

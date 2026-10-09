@@ -27,7 +27,9 @@ const MAX_STEPS = 8;
 // (something basic that doesn't match) just means normal Claude behaviour,
 // not a wrong answer, so there is no pressure to make this exhaustive.
 const NEEDS_REASONING = /\b(why|analy[sz]e|compare|design|plan|architect|strategy|should i|what do you think|recommend|explain|write (me |us )?(a|an|the)\b)/i;
-const ACTION_VERBS = /\b(click|press|play|pause|navigate|go to|open\s.{0,20}\b(tab|page|site|browser)\b|type|read (the|this) (page|tab)|screenshot|list (the )?(open )?tabs|find the tab|check (the )?tab|switch to (the )?tab)\b/i;
+// Diagnosing and fixing always go to Claude (v3.4), however short the request.
+const NEEDS_CLAUDE = /\b(fix|repair|diagnos\w*|scan|troubleshoot|broken|not working|doesn'?t work|won'?t|crash\w*|error|slow|virus|malware|clean ?up|install|uninstall|update|driver|disk|drive|memory|cpu|wi-?fi|network|internet)\b/i;
+const ACTION_VERBS = /\b(click|press|play|pause|resume|skip|next track|previous track|mute|unmute|volume|louder|quieter|turn (it |the volume )?(up|down)|navigate|go to|open\s.{0,20}\b(tab|page|site|browser)\b|type|read (the|this) (page|tab)|screenshot|list (the )?(open )?tabs|find the tab|check (the )?tab|switch to (the )?tab)\b/i;
 
 // Exported so selfcheck can unit-test the classifier directly, with no live
 // model involved -- same spirit as control_engine.mjs's detectIntents tests.
@@ -35,6 +37,7 @@ export function looksBasic(text) {
   const s = String(text || '').trim();
   if (!s || s.length > 220) return false;        // long messages are rarely one mechanical step
   if (NEEDS_REASONING.test(s)) return false;       // judgment/reasoning language -- send to Claude
+  if (NEEDS_CLAUDE.test(s)) return false;          // diagnosing / fixing -- Claude only
   if (/[.!?].{20,}[.!?]/.test(s)) return false;    // more than one real sentence -- likely multi-part
   return ACTION_VERBS.test(s);
 }

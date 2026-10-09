@@ -48,9 +48,10 @@ anything you could type yourself, with a working directory, a timeout, and struc
 
 ## 3. Diagnose the machine
 
-Describe a symptom in your own words — she picks the routine, runs real commands, and parses
-output into numbers. "my wifi is gone" and "disk is full" both land correctly without you
-naming anything.
+Describe a symptom in your own words and Claude investigates it -- running real commands
+and the diagnostic tools as it sees fit. Nothing is pattern-matched: saying "disk scan" in
+passing does not trigger a canned routine. The routines below are what the diagnostic layer
+can measure; offline, only the network one is used (see section 15).
 
 | Routine | What she actually checks |
 |---|---|
@@ -283,33 +284,33 @@ token, tools appear as they execute, and the task list updates in place.
 
 ---
 
-## 15. She keeps working without the internet
+## 15. Offline: she gets the connection back
 
-The part most assistants don't have. Three levels of intelligence that degrade instead of dying.
+Without internet she has one job: restore the connection. Once the cloud model is reachable
+it handles everything else, so offline she doesn't try to diagnose your disk or hold a
+conversation -- she works on the network and tells you exactly where it stands.
 
-```
-   L4 Cloud            L3 Local model         L2 Control engine
-   ---------           --------------         -----------------
-   Claude.             Runs on your GPU.      Measures and repairs
-   50 tools, agents,   Talks, reasons,        with no model at all.
-   skills.             calls 8 tools.
-        |                     |                       |
-        +--credits gone------>+--no net / no GPU----->+- this floor never
-                                                          disappears
-```
+| Situation | What she does |
+|---|---|
+| **Online** | Everything goes to Claude. Only basic commands -- volume, media, browser tabs -- go to the local model first to save credits; anything about fixing or diagnosing never does |
+| **Credits or rate limit exhausted** (internet fine) | Tells you so. No local-model fallback -- the local model doesn't fix things |
+| **AI provider down** (internet fine) | Tries the other Claude models, then tells you it's the provider, not you |
+| **No internet** | Wi-Fi / network recovery only, all hard-coded (below). If still down, replies with what she measured, what she tried, what you need to do, and the live adapter data |
 
-| Tier | When | What she can still do |
-|---|---|---|
-| **L4** Cloud | Default | Everything — full tool surface, agents, skills, crystallisation. Fails over between models automatically when one is rate-limited |
-| **L3** Local model | Credits gone, or no network | Qwen 2.5 3B loads on demand. Starts in ~3s, answers in under 2s. Holds a conversation, runs shell commands, reads and writes files, applies repairs |
-| **L2** Control engine | Always | All twelve diagnostics and the repair library, on raw code. No API key, no internet, no model weights |
+**Every way she knows Wi-Fi can break, and what she does about it:**
 
-**The rule that binds them:** whatever L2 measures is fact. A model above it can explain the
-findings, prioritise them and recommend a repair — but cannot overrule a measurement. That's
-why she doesn't tell you the Wi-Fi is broken when the data says 144 Mbps at zero packet loss.
+| Measured | Windows | Linux | macOS |
+|---|---|---|---|
+| Sign-in page (hotel, airport, cafe) | Tells you to open a site and sign in | same | same |
+| WLAN AutoConfig service stopped | Starts it (needs admin) | -- | -- |
+| Wi-Fi adapter disabled | Enables it (needs admin) | Radio on + connect | -- |
+| Wi-Fi radio off / airplane mode | Tells you: Wi-Fi button, Fn key, airplane mode | Turns the radio on | Turns Wi-Fi power on |
+| Not connected to any network | Rejoins a saved network that's in range | Reconnects through NetworkManager | Tells you |
+| No saved network in range | Names your saved networks, says none are in range | same | same |
 
-This is what makes a network fault something she can *fix* rather than something that
-*disables* her.
+**The rule that still binds them:** whatever the control engine measures is fact. A model can
+explain the findings, but cannot overrule a measurement. That's why she doesn't tell you the
+Wi-Fi is broken when the data says 144 Mbps at zero packet loss.
 
 **She repairs her own connection first.** When the cloud model can't be reached, before
 falling back to anything she measures where the link is broken and fixes the layer that
@@ -320,11 +321,11 @@ failed, then retries the same request:
 | No adapter has an address | Restart the adapter (Windows) / NetworkManager (Linux) |
 | Only a 169.254.x.x address | DHCP release and renew |
 | Internet reachable, API name won't resolve | Flush the DNS cache |
-| Address fine, nothing reachable | **Nothing** -- recommends the winsock reset, which needs a reboot and your approval |
+| Address fine, nothing reachable | **Nothing automatic** -- on Windows she asks you yes/no before the winsock reset (needs admin and a reboot) |
 | Internet fine, provider not answering | Nothing to fix locally; she says so |
 
 Each fix runs through the fix library's detect -> apply -> verify contract, so it builds a
-track record on this machine. Set `NET_TRIAGE=off` in `config/.env` to only report.
+track record on this machine. Set `NET_TRIAGE=off` in `config/.env` to only measure and report.
 
 **A silent provider can't freeze her.** If a model accepts a request and then goes quiet,
 she abandons it after `API_STALL_MS` (default 2 minutes, 5x for local models), tries one

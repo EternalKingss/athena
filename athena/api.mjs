@@ -2,7 +2,7 @@
 import {
   API_KEY, BASE,
   ANTHROPIC_KEY, ANTHROPIC_BASE, ANTHROPIC_VERSION,
-  CURATED_MODELS, LOCAL_LLM_PORT, isOfflineMode, state, API_STALL_MS,
+  CURATED_MODELS, LOCAL_LLM_PORT, state, API_STALL_MS,
 } from './config.mjs';
 import { triageNetwork } from './net_triage.mjs';
 
@@ -87,11 +87,10 @@ function buildFallbackList() {
       if (m !== current) result.push(m);
     }
   }
-  if (isOfflineMode()) {
-    const local  = result.filter(m => m.startsWith('local-'));
-    const others = result.filter(m => !m.startsWith('local-'));
-    return [...local, ...others];
-  }
+  // The local model is never a fallback for Claude (v3.4): it handles basic commands only
+  // (task_router.mjs), never diagnosis or fixing. It stays in the list only when the user
+  // explicitly switched to it with /model.
+  if (!String(current).startsWith('local-')) return result.filter(m => !m.startsWith('local-'));
   return result;
 }
 
@@ -285,15 +284,23 @@ async function readWithIdle(reader, res, model) {
 }
 
 // Runs network triage at most once per chat()/chatStream() call, and only for a cloud
-// model -- a local model being unreachable says nothing about the network.
+// model -- a local model being unreachable says nothing about the network. Returns the
+// triage result, or null when triage does not apply.
 async function tryNetworkTriage(base, model) {
-  if (String(model).startsWith('local-')) return false;
+  if (String(model).startsWith('local-')) return null;
   let host = '';
   try { host = new URL(base).hostname; } catch {}
-  if (!host || host === '127.0.0.1' || host === 'localhost') return false;
-  try { return (await triageNetwork({ host })).restored === true; }
-  catch { return false; }
+  if (!host || host === '127.0.0.1' || host === 'localhost') return null;
+  try { return await triageNetwork({ host }); }
+  catch { return null; }
 }
+
+// Offline means one thing (v3.4): this machine has no working internet. When triage
+// confirms that, trying the other cloud models is pointless and falling back to the local
+// model is not wanted -- the only useful work is getting the connection back, which
+// core.mjs reports. No failure is recorded against the cloud models either: the network
+// was at fault, not them, and blocking them would keep Athena on a fallback after the
+// connection returns.
 
 // ---- HTTP helpers ----
 const RETRYABLE = new Set([429, 502, 503, 504]);
@@ -421,7 +428,12 @@ export async function chat(messages, opts = {}) {
     } catch (err) {
       const conn = isConnError(err);
       if (conn && model.startsWith('local-') && await ensureLocalUp(model)) continue;  // started it; retry same model
-      if (conn && !triaged) { triaged = true; if (await tryNetworkTriage(base, model)) continue; }  // network fixed; retry same model
+      if (conn && !triaged) {
+        triaged = true;
+        const tri = await tryNetworkTriage(base, model);
+        if (tri && tri.restored) continue;   // network fixed; retry same model
+        if (tri && tri.networkDown) { connFailures++; modelAttempts++; break; }
+      }
       if (err.stalled) {
         recordModelFailure(model);
         stallFailures++;
@@ -469,10 +481,12 @@ export async function* chatStream(messages, tools, opts = {}) {
       }
       if (conn && !yielded && !triaged) {
         triaged = true;
-        if (await tryNetworkTriage(base, model)) {
+        const tri = await tryNetworkTriage(base, model);
+        if (tri && tri.restored) {
           console.warn('[api:failover] network restored -- retrying "' + model + '"');
           continue;
         }
+        if (tri && tri.networkDown) { connFailures++; modelAttempts++; break; }
       }
       if (err.stalled) {
         recordModelFailure(model);

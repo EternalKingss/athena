@@ -558,19 +558,15 @@ export async function runTool(name, args, preApproved, sessionTodos, setSessionT
 }
 
 // ---- Tool surface for small local models ----
-// Deliberately blunt: act, look, remember, ask, and reuse what this machine already
-// learned. Everything omitted is either a diagnostic L2 has already run, or a
-// coordination tool (agents, skills, reports) that a 3.8B model handles poorly and does
-// not need in a credits-exhausted fallback session.
+// Basic commands only (v3.4): volume, media, opening things, the browser. Diagnosing and
+// fixing belong to Claude, so the local model gets no fix, write or diagnostic tools --
+// run_shell stays because that is how volume and media keys are driven.
 export const LOCAL_TOOL_NAMES = new Set([
   'run_shell',
   'read_file',
   'list_dir',
-  'write_file',
   'memory',
   'clarify',
-  'machine_fixes',
-  'apply_fix',
 ]);
 
 export function toolsForModel(model) {

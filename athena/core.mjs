@@ -206,14 +206,8 @@ export async function turn(messages, emit, opts = {}) {
       // Rate limit / provider failure is NOT the same as being offline.
       // "exhausted" means every model was tried and refused (usually 429).
       if (netErr.message && netErr.message.includes('exhausted')) {
-        let hint = 'Wait a minute and try again.';
-        try {
-          const { detectLocalModels } = await import('./local_llm.mjs');
-          const local = detectLocalModels();
-          hint = local.length
-            ? 'A local model is on disk (' + local.map(m => m.id).join(', ') + ') but could not be started -- check runtime/llama-server and runtime/models/.'
-            : 'No local model is installed, so there is nothing to fall back to. Run runtime/get-offline.sh to add one.';
-        } catch {}
+        // No local-model fallback here (v3.4): the local model only does basic commands.
+        const hint = 'Wait a minute and try again, or check your Anthropic credits and API key.';
         import('./telemetry.mjs').then(({ logError }) => logError('models_exhausted', netErr, { model: state.activeModel })).catch(() => {});
         emit({ type: 'error', message: 'Every cloud model refused (rate limit, quota, or credits). You are NOT offline. ' + hint });
         emit({ type: 'done' });
@@ -236,28 +230,14 @@ export async function turn(messages, emit, opts = {}) {
         import('./telemetry.mjs').then(({ logError }) => logError('turn_llm_call', netErr, { model: state.activeModel })).catch(() => {});
         throw netErr;
       }
-      emit({ type: 'system', text: 'Network unavailable -- offline mode (L2 engine active)' });
-      const { detectIntents, runPlan } = await import('./control_engine.mjs');
-      const lastUser = [...messages].reverse().find(m => m.role === 'user');
-      const userInput = typeof lastUser?.content === 'string' ? lastUser.content : '';
-      const intents = detectIntents(userInput);
+      // Offline (v3.4): the only job without a connection is getting it back. Once the
+      // cloud model is reachable it handles everything else, so this reply is about the
+      // network and nothing else -- no general health sweep, whatever was asked.
+      emit({ type: 'system', text: 'Offline -- network recovery mode' });
       emit({ type: 'stream_start' });
-      if (intents) {
-        const report = await runPlan(intents, emit);
-        emit({ type: 'token', content: report });
-        messages.push({ role: 'assistant', content: report });
-      } else {
-        // Offline and the phrasing did not map to a workflow. A menu is useless to
-        // someone whose machine is broken -- run the broad health sweep and say what is
-        // actually wrong, then offer the narrower checks.
-        emit({ type: 'token', content: "I'm offline -- no internet. Running a full local check instead of guessing.\n\n" });
-        let report;
-        try { report = await runPlan(['system_health', 'network_check'], emit); }
-        catch (e) { report = '(local diagnostics failed: ' + e.message + ')'; }
-        const tail = "\n\nIf that missed it, name the area: disk, network, adapter/driver, boot, processes, logs, services.";
-        emit({ type: 'token', content: report + tail });
-        messages.push({ role: 'assistant', content: report + tail });
-      }
+      const report = await offlineNetworkReport(inputHandler, emit);
+      emit({ type: 'token', content: report });
+      messages.push({ role: 'assistant', content: report });
       emit({ type: 'stream_end' });
       emit({ type: 'done' });
       if (!opts.isolated) { _turnActive = false; }
@@ -580,90 +560,85 @@ export function freshMessages() {
   return [{ role: 'system', content: (isOfflineMode() || isLocalModelActive()) ? offlineSystemPrompt() : systemPrompt() }];
 }
 
-// ---- L2/L3/L4 routing: turnWithFallback ----
-// L2 (Control Engine) handles known diagnostic intents deterministically.
-// L3 (local LLM) handles ambiguous intent when no cloud key.
-// L4 (cloud LLM) handles everything when available.
-// L2 state truth is immutable -- L3/L4 may only annotate, not contradict.
-export async function turnWithFallback(messages, emit, opts = {}) {
-  const hasCloud = !isOfflineMode();
-  const hasLocal = !hasCloud && await import('./local_llm.mjs').then(m => m.isLocalLLMRunning()).catch(() => false);
-  const hasLLM   = hasCloud || hasLocal;
+// ---- Offline reply: network only ----
+// Built from what net_triage.mjs measured during the failed call (api.mjs runs it) plus
+// the L2 network_check routine for the raw adapter data. The winsock / IP-stack reset is
+// the one repair triage never runs on its own; with no model online to ask through
+// fix_issues, it is offered here as a direct yes/no.
+async function offlineNetworkReport(ask, emit) {
+  const { lastTriage, LAYER_TEXT, stackResetFixId } = await import('./net_triage.mjs');
+  const tri = lastTriage();
+  const lines = [tri && tri.layer === 'provider'
+    ? 'The internet is working, but the AI provider is not answering -- nothing on this machine to fix.'
+    : "I'm offline, so the only thing I'm working on is getting the connection back.", ''];
 
-  // L2: check if input maps to a known workflow
-  const { detectIntents, runPlan } = await import('./control_engine.mjs');
+  if (tri && tri.layer && LAYER_TEXT[tri.layer]) {
+    lines.push('What I measured: ' + LAYER_TEXT[tri.layer] + '.');
+    const tried = (tri.steps || []).map(st => st.fixId);
+    lines.push(tried.length ? 'What I tried: ' + tried.join(', ') + ' -- the connection is still down.' : 'What I tried: nothing applied automatically.');
+    if (tri.advice) lines.push(tri.advice);
+  } else {
+    lines.push('I could not measure the network path (' + ((tri && (tri.error || tri.skipped)) || 'no triage result') + ').');
+  }
+
+  const resetId = tri && tri.layer === 'stack' ? stackResetFixId() : null;
+  if (resetId && ask) {
+    let answer = '';
+    try {
+      answer = String(await ask('Reset the Windows network stack (winsock + IP)? It needs admin, and it only takes effect after a reboot. It also removes VPN and similar network add-ons, which their installers re-add.', ['yes', 'no']) || '');
+    } catch {}
+    if (/^y/i.test(answer.trim())) {
+      try {
+        const { applyFix } = await import('./machine_fixes.mjs');
+        const res = await applyFix(resetId, { force: true });
+        lines.push('', res.message, '', res.verified
+          ? 'Restart the computer now -- the reset only takes effect after a reboot.'
+          : 'The reset did not complete. It needs Athena running as administrator -- start Athena.bat with "Run as administrator" and try again.');
+      } catch (e) {
+        lines.push('', 'The reset failed: ' + e.message);
+      }
+    } else {
+      lines.push('', 'Left the network stack alone.');
+    }
+  }
+
+  try {
+    const { runPlan } = await import('./control_engine.mjs');
+    // Progress tokens would land above this reply's first line; keep only non-token events.
+    const net = await runPlan(['network_check'], e => { if (e && e.type !== 'token') emit(e); });
+    if (net) lines.push('', net);
+  } catch (e) {
+    lines.push('', '(network check failed: ' + e.message + ')');
+  }
+
+  lines.push('', 'Send your message again once the connection is back -- everything else is handled online.');
+  return lines.join('\n');
+}
+
+// ---- Entry point for every user message (CLI and UI) ----
+// v3.4: no hard-coded interception. Every message goes to Claude, which decides for itself
+// whether to diagnose and with which tools -- saying "disk scan" in passing no longer
+// triggers a canned routine. The control engine's routines run in exactly one place: the
+// offline reply, where network recovery is the only job (see offlineNetworkReport).
+// The local model only ever gets basic commands (task_router.mjs); it never diagnoses or
+// fixes, so with no cloud key there is nothing else it is allowed to do.
+export async function turnWithFallback(messages, emit, opts = {}) {
+  if (!isOfflineMode()) return turn(messages, emit, opts);
+
   const lastUser = [...messages].reverse().find(m => m.role === 'user');
   const input    = typeof lastUser?.content === 'string' ? lastUser.content : '';
-  const intents  = detectIntents(input);
-
-  if (intents) {
-    // L2 handles this -- run deterministic plan regardless of LLM availability
-    emit({ type: 'status', text: 'running' });
-    emit({ type: 'stream_start' });
-    const report = await runPlan(intents, emit);
-    // If LLM available, append AI interpretation (annotate only, never override)
-    if (hasLLM) {
-      emit({ type: 'token', content: report });
-      messages.push({ role: 'assistant', content: report });
-      // Feed to LLM as context for interpretation
-      if (hasCloud) {
-        messages.push({ role: 'user', content: '[L2 diagnostic report above -- interpret and summarize the key findings. The DATA blocks are measured output: do not invent values that contradict them. STATUS is a heuristic over that data, so if the DATA shows something the STATUS missed, say so.]' });
-      } else {
-        // L3 is a small local model. Give it the computed findings and the fix list, not
-        // the raw data -- a narrow job it gets right instead of a broad one it fabricates.
-        const { lastPlanSummary } = await import('./control_engine.mjs');
-        const plan = lastPlanSummary();
-        let fixList = '';
-        try {
-          const { allFixes } = await import('./machine_fixes.mjs');
-          fixList = (await allFixes()).map(f => f.id + ' -- ' + f.title).join('\n');
-        } catch { fixList = '(fix library unavailable)'; }
-        messages.push({ role: 'user', content: [
-          '[L2 already inspected this machine. Below is what it measured -- treat it as fact.]',
-          '',
-          'L2 STATUS: ' + plan.status,
-          'FINDINGS:',
-          plan.findings.length ? plan.findings.map(f => '- ' + f).join('\n') : '(none)',
-          '',
-          'Fix ids available:',
-          fixList,
-          '',
-          'Reply in at most 3 short sentences, plain language, no markdown, no headings.',
-          'Say what is wrong using only the findings above, then name exactly one fix id to run first.',
-          'If there are no findings, say the check came back clean, do not invent a fault, and suggest one thing to check next.',
-          'Do not list fix ids you are not recommending.',
-        ].join('\n') });
-      }
-      emit({ type: 'stream_end' });
-      return turn(messages, emit, opts);
-    }
-    emit({ type: 'token', content: report });
-    emit({ type: 'stream_end' });
-    messages.push({ role: 'assistant', content: report });
-    emit({ type: 'done' });
+  emit({ type: 'status', text: 'thinking' });
+  const routed = input ? await tryLocalFirst(input, emit).catch(() => ({ handled: false })) : { handled: false };
+  if (routed.handled) {
+    messages.push({ role: 'assistant', content: routed.finalText || '(done)' });
+    emit({ type: 'done', text: routed.finalText || undefined });
     return;
   }
-
-  if (hasLLM) {
-    // Unknown intent but LLM available -- let it handle
-    return turn(messages, emit, opts);
-  }
-
-  // No LLM, no known intent -- show capability list
-  const { listWorkflows } = await import('./control_engine.mjs');
-  const wfList = listWorkflows().map(w => '  ' + w.name).join('\n');
-  emit({ type: 'status', text: 'done' });
-  emit({ type: 'stream_start' });
   const msg = [
-    '[Control Engine -- no AI model available]',
-    '',
-    'I cannot interpret this request without AI reasoning.',
-    'Available direct diagnostics (just describe what you need):',
-    wfList,
-    '',
-    'To enable AI reasoning: run runtime/get-offline.sh  (~2.2 GB download)',
-    'Or add ANTHROPIC_API_KEY to config/.env',
+    'That needs Claude, and no cloud API key is configured.',
+    'Add ANTHROPIC_API_KEY to config/.env. Without it I can only do basic commands on the local model (volume, media, browser tabs).',
   ].join('\n');
+  emit({ type: 'stream_start' });
   emit({ type: 'token', content: msg });
   emit({ type: 'stream_end' });
   messages.push({ role: 'assistant', content: msg });

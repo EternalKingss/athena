@@ -3,6 +3,7 @@
 // v3.1: offline-first architecture -- L2 Control Engine (zero dependencies), L3 local LLM, full cloud fallback.
 // v3.2: OS kernel + modules -- Module 1 (system), Module 2 (browser + Chrome extension), Module 3 phase 1 (Gmail + Calendar).
 // v3.3: network triage (net_triage.mjs) restores the cloud link on its own; API calls can no longer hang the turn.
+// v3.4: offline = network recovery only. No local-model fallback when the network is down; the reply is the network report.
 // Zero npm dependencies -- only Node built-ins.
 
 import * as readline from 'node:readline/promises';
