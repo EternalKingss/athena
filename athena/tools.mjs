@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve, join, isAbsolute, delimiter } from 'node:path';
 import { exec, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import { BRAVE_KEY, AUTO, RESUME_PATH } from './config.mjs';
+import { BRAVE_KEY, AUTO } from './config.mjs';
 import { PATHS } from './paths.mjs';
 import { handleMemoryTool } from './memory.mjs';
 import { loadSkill, saveSkill, updateSkill, getSkillStatus, rollbackSkill, listSkillVersions } from './skills.mjs';
@@ -19,8 +19,6 @@ import { createRequire } from 'node:module';
 // rest of the built-in tool surface instead of being its own registered kernel module.
 import { runBoundedAgentLoop } from './agent_loop.mjs';
 import { pickLocalModelId } from './local_llm.mjs';
-const _pdfRequire = createRequire(import.meta.url);
-const { PDFParse } = _pdfRequire('pdf-parse');
 
 // previewCall is synchronous (the approval gate cannot await), so the fix store is loaded
 // through a sync require rather than a dynamic import.
@@ -182,7 +180,6 @@ export const TOOLS = [
   { type: 'function', function: { name: 'diff_machine_state', description: 'Compare what is RUNNING right now -- processes, listening ports, loaded drivers -- against a saved baseline of this machine in a known-good state. Use it when something worked before and does not now, especially after a reboot: a driver present in the baseline and missing now is the answer. Pass save:true while the machine is healthy to record the baseline first.', parameters: { type: 'object', properties: { save: { type: 'boolean', description: 'Capture the current state as the new baseline instead of diffing against it.' } } } } },
   { type: 'function', function: { name: 'skill_rollback', description: 'Roll back a skill to a prior version. Use list_versions:true to see available versions.', parameters: { type: 'object', properties: { name: { type: 'string' }, version: { type: 'number' }, list_versions: { type: 'boolean' } }, required: ['name'] } } },
   { type: 'function', function: { name: 'delegate_to_local', description: 'Hand a single, concrete, well-scoped subtask to whichever local model is loaded on this machine, and have it actually carried out and verified -- not just described. Use for mechanical, low-risk actions (a browser click, a file read, listing tabs) that do not need real judgment. Do not use this for anything ambiguous, judgment-heavy, multi-interpretation, or destructive.', parameters: { type: 'object', properties: { task: { type: 'string', description: 'One concrete subtask, described the way you would brief a junior assistant.' }, maxSteps: { type: 'number', description: 'Max tool-call rounds before giving up (default 6, hard cap 12).' } }, required: ['task'] } } },
-  { type: 'function', function: { name: 'read_applicant_profile', description: 'Read the user\'s resume and return its full text, for job applications or anything else that needs their work history, skills, education, or contact info. Cached by file mtime -- cheap to call repeatedly. Defaults to the configured resume (RESUME_PATH); pass path to read a different file. PDF only for now.', parameters: { type: 'object', properties: { path: { type: 'string', description: 'Optional -- overrides the configured default resume path.' }, refresh: { type: 'boolean', description: 'Force re-extraction even if a fresh cache exists.' } } } } },
 ];
 
 // (The sudo lockout counter lived here. It existed only to make the automatic sudo
@@ -557,43 +554,6 @@ export async function runTool(name, args, preApproved, sessionTodos, setSessionT
     return JSON.stringify(result);
   }
 
-  if (name === 'read_applicant_profile') {
-    const targetPath = String(args.path || RESUME_PATH || '').trim();
-    if (!targetPath) return JSON.stringify({ ok: false, failureReason: 'no resume path configured -- set RESUME_PATH in config/.env, or pass path explicitly' });
-    if (!existsSync(targetPath)) return JSON.stringify({ ok: false, failureReason: 'file not found: ' + targetPath });
-    if (!/\.pdf$/i.test(targetPath)) return JSON.stringify({ ok: false, failureReason: 'only PDF resumes are supported right now: ' + targetPath });
-
-    const st = await stat(targetPath);
-    const sourceMtimeMs = st.mtimeMs;
-
-    if (!args.refresh) {
-      try {
-        const cache = JSON.parse(readFileSync(PATHS.resumeCache, 'utf8'));
-        if (cache.sourcePath === targetPath && cache.sourceMtimeMs === sourceMtimeMs) {
-          return JSON.stringify({ ok: true, sourcePath: targetPath, extractedAt: cache.extractedAt, cached: true, text: cache.text });
-        }
-      } catch {}
-    }
-
-    let text;
-    try {
-      const buffer = await readFile(targetPath);
-      const parser = new PDFParse({ data: buffer });
-      const result = await parser.getText();
-      await parser.destroy();
-      text = (result.text || '').trim();
-    } catch (e) {
-      return JSON.stringify({ ok: false, failureReason: 'could not extract text from ' + targetPath + ': ' + e.message });
-    }
-    if (!text) return JSON.stringify({ ok: false, failureReason: 'extracted no text from ' + targetPath + ' -- is it a scanned image with no real text layer?' });
-
-    const extractedAt = new Date().toISOString();
-    try {
-      await writeFile(PATHS.resumeCache, JSON.stringify({ sourcePath: targetPath, sourceMtimeMs, extractedAt, text }));
-    } catch {}
-    return JSON.stringify({ ok: true, sourcePath: targetPath, extractedAt, cached: false, text });
-  }
-
   return 'Unknown tool: ' + name;
 }
 
@@ -611,7 +571,6 @@ export const LOCAL_TOOL_NAMES = new Set([
   'clarify',
   'machine_fixes',
   'apply_fix',
-  'read_applicant_profile',
 ]);
 
 export function toolsForModel(model) {
@@ -631,17 +590,11 @@ export function toolsForModel(model) {
 // browser_click, so this pattern is the one place that boundary has to hold even if an
 // agent_loop task or a prompt bug tries to click through it anyway.
 //
-// Job application submission is gated too (v3.2, auto-apply removed on direct instruction):
-// Athena can still search, read, and fill out an application, but the final "submit
-// application" click is tier 2 and flagged irreversible, same as a purchase -- an
-// application, once sent, can't be pulled back. Email stays moot: modules/google.mjs's
-// OAuth app was never granted gmail.send, so there's no code path that could send one.
-// This is a text-match heuristic on the clicked element and can be wrong in either
-// direction -- a bare "Submit" with no other cue is genuinely ambiguous. PURCHASE_LIKE is
-// checked first only so the approval prompt names the right kind of action.
+// Only actions that move money (a purchase, a booking) get this approval gate. Email is
+// moot: modules/google.mjs's OAuth app was never granted gmail.send, so there's no code
+// path that could send one. This is a text-match heuristic on the clicked element and can
+// be wrong in either direction -- a bare "Submit" with no other cue is genuinely ambiguous.
 const PURCHASE_LIKE = /\b(place order|buy now|pay now|book now|confirm (order|purchase|payment|booking)|complete (purchase|order|booking|checkout)|checkout|finalize (order|booking))\b/i;
-// Job-application submit controls -- tier 2 and irreversible, see the comment above.
-const JOB_APPLY_LIKE = /\b(submit application|submit my application|apply now|apply for this job|easy apply|send application|finalize application)\b/i;
 
 const IRREVERSIBLE = [
   { re: /\b(format|mkfs|diskpart)\b/i,                       why: 'formats or repartitions a disk' },
@@ -672,12 +625,10 @@ export function irreversibleReason(name, args) {
   // a purchase/checkout control is exactly as irreversible as anything else in this list
   // once it fires (money moves). Checked here on name rather than folded into IRREVERSIBLE,
   // because the target text lives in args.selector/args.text, not
-  // args.command/content/steps. Job-application submits are checked here too, so the gate
-  // holds under AUTO_APPROVE -- see PURCHASE_LIKE's comment above.
+  // args.command/content/steps -- see PURCHASE_LIKE's comment above.
   if (name === 'browser_click') {
     const target = [a.selector, a.text].filter(Boolean).join(' ');
     if (PURCHASE_LIKE.test(target)) return 'clicks a purchase/checkout control ("' + target.slice(0, 60) + '")';
-    if (JOB_APPLY_LIKE.test(target)) return 'submits a job application ("' + target.slice(0, 60) + '")';
   }
 
   // apply_fix and fix_issues name a stored fix by id -- the commands live in the fix store
@@ -862,8 +813,6 @@ export function classifyRisk(name, args, machineProfile) {
     const target = [args && args.selector, args && args.text].filter(Boolean).join(' ');
     if (PURCHASE_LIKE.test(target))
       return { tier: 2, reason: 'clicks a purchase/checkout control -- confirm before this goes out' };
-    if (JOB_APPLY_LIKE.test(target))
-      return { tier: 2, reason: 'submits a job application -- confirm before this goes out' };
     return { tier: 1, reason: 'clicks an element on the page' };
   }
 

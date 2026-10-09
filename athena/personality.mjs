@@ -207,7 +207,7 @@ export function offlineSystemPrompt() {
     'RULES:',
     '- Answer conversational questions directly without tools.',
     '- NEVER fabricate a tool result. If the answer depends on something you would need a',
-    '  tool to know (a file, the browser, the resume, memory, machine status, anything',
+    '  tool to know (a file, the browser, memory, machine status, anything',
     '  live) -- call the tool and use its real output. Do not describe, guess, or invent',
     '  what a tool would probably return and present that as the answer.',
     '- If a tool call fails or is unavailable, say so plainly. A clear "I could not check"',

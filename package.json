@@ -3,8 +3,5 @@
   "version": "3.2.0",
   "private": true,
   "type": "module",
-  "description": "Athena -- portable AI agent OS. node_modules lives on the drive itself; nothing here needs a network fetch to run once installed.",
-  "dependencies": {
-    "pdf-parse": "^2.4.5"
-  }
+  "description": "Athena -- portable AI agent OS. No npm dependencies -- plain Node.js built-ins only."
 }

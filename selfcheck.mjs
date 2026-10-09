@@ -28,7 +28,7 @@ const SHOULD = [['i cant see my wifi','network_check'],['disk is full','disk_che
 t(SHOULD.length + ' complaints route', SHOULD.every(([s,w]) => (detectIntents(s)||[]).includes(w)));
 const QUIET = ['hey','write me a poem about the sea','explain how wifi actually works',
   'what does it mean when a driver is unsigned','my friend says his network is broken',
-  'please invoke browser_status and paste its output here','run read_applicant_profile please'];
+  'please invoke browser_status and paste its output here'];
 t(QUIET.length + ' questions stay out', QUIET.every(s => !(detectIntents(s)||[]).length));
 
 // ---- Pre-Claude cost-gate heuristic (task_router.mjs) ----
@@ -38,7 +38,7 @@ const { looksBasic } = await import('./athena/task_router.mjs');
 const ROUTER_BASIC = [
   'can you press play on the youtube video i have running',
   'click the play button',
-  'open a new tab to indeed.com',
+  'open a new tab to wikipedia.org',
   'list the open tabs',
   'navigate to gmail.com',
   'type my email into the search bar',
@@ -63,20 +63,14 @@ t('chained destructive tier 2', classifyRisk('run_shell',{command:'ls && Remove-
 t('chained read-only tier 1', classifyRisk('run_shell',{command:'ls && pwd'}).tier === 1);
 t('apply_fix gate sees stored steps', irreversibleReason('apply_fix',{id:'clear-windows-update-cache'}) !== null);
 
-// Module 3 phase 3 (job search & apply) ships no job_application_submit tool at all, and
-// auto-apply is removed (v3.2): job-application submit clicks are tier 2 and irreversible,
-// same as purchase/checkout clicks. See tools.mjs's PURCHASE_LIKE/JOB_APPLY_LIKE comment.
-t('browser_click job-apply submit tier 2 (no auto-apply)',
-  classifyRisk('browser_click', {text:'Submit Application'}).tier === 2 && classifyRisk('browser_click', {text:'Apply Now'}).tier === 2);
-t('browser_click job-apply submit irreversible',
-  irreversibleReason('browser_click', {text:'Submit Application'}) !== null && irreversibleReason('browser_click', {text:'Apply Now'}) !== null);
+// Only purchase/checkout clicks are gated. See tools.mjs's PURCHASE_LIKE comment.
 t('browser_click purchase-like tier 2',
   classifyRisk('browser_click', {text:'Place Order'}).tier === 2 && classifyRisk('browser_click', {text:'Buy Now'}).tier === 2);
 t('browser_click purchase-like irreversible', irreversibleReason('browser_click', {text:'Complete Purchase'}) !== null);
 t('browser_click ordinary tier 1', classifyRisk('browser_click', {text:'Next page'}).tier === 1);
 t('browser_click ordinary not irreversible', irreversibleReason('browser_click', {text:'Next page'}) === null);
 const names = TOOLS.map(x => x.function?.name);
-t('38 tools, no dupes', names.length === 38 && new Set(names).size === 38, names.length);
+t('37 tools, no dupes', names.length === 37 && new Set(names).size === 37, names.length);
 
 const { publishMachineId } = await import('./athena/machines.mjs');
 const { loadInstincts } = await import('./athena/memory.mjs');
@@ -102,7 +96,7 @@ _resetKernelForTests();
 const kernel = bootKernel({ startHeartbeat: false }); // no live interval in a one-shot test process
 
 const sysMod = kernel.listModules().find(m => m.name === 'system');
-t('module 1 (system) registers all 38 tools as capabilities', sysMod?.capabilities.length === 38, sysMod?.capabilities.length);
+t('module 1 (system) registers all 37 tools as capabilities', sysMod?.capabilities.length === 37, sysMod?.capabilities.length);
 t('module 1 healthy after boot', kernel.isHealthy('system') === true);
 
 // ---- Module 2 (browser) -- isolation, tool-surface merge, relay round-trip ----
@@ -134,14 +128,14 @@ t('module 2 healthy after boot (relay listening)', kernel.isHealthy('browser') =
 const { toolsForModel } = await import('./athena/kernel/toolSurface.mjs');
 const cloudNames = toolsForModel('claude-opus-5').map(x => x.function.name);
 t('kernel tool surface merges module 2 capabilities for cloud models',
-  cloudNames.length === 51 && cloudNames.includes('browser_navigate') && cloudNames.includes('browser_screenshot') && cloudNames.includes('delegate_to_local') && cloudNames.includes('read_applicant_profile'),
+  cloudNames.length === 50 && cloudNames.includes('browser_navigate') && cloudNames.includes('browser_screenshot') && cloudNames.includes('delegate_to_local') && !cloudNames.includes('read_applicant_profile'),
   cloudNames.length);
 t('kernel tool surface merges module 3 (google) capabilities for cloud models',
   cloudNames.includes('email_list') && cloudNames.includes('email_draft') && cloudNames.includes('calendar_create_event'),
   cloudNames.length);
 const localToolNames = toolsForModel('local-qwen2-5-3b-instruct-q4-k-m').map(x => x.function.name);
 t('kernel tool surface respects localOk:false for local models',
-  localToolNames.length === 18 && localToolNames.includes('browser_navigate') && !localToolNames.includes('browser_screenshot') && !localToolNames.includes('delegate_to_local') && localToolNames.includes('read_applicant_profile'),
+  localToolNames.length === 17 && localToolNames.includes('browser_navigate') && !localToolNames.includes('browser_screenshot') && !localToolNames.includes('delegate_to_local') && !localToolNames.includes('read_applicant_profile'),
   localToolNames.length);
 t('kernel tool surface keeps google writes cloud-only for local models',
   localToolNames.includes('email_list') && localToolNames.includes('calendar_list') && !localToolNames.includes('email_draft') && !localToolNames.includes('calendar_create_event') && !localToolNames.includes('calendar_update_event'),
@@ -192,15 +186,6 @@ t('dispatch reaches the real tool (non-error, non-empty)',
 const unknownResult = await kernel.dispatch('does_not_exist_capability', {});
 t('unknown capability returns a clean error string, not a throw',
   unknownResult === 'Error: no module registered for capability "does_not_exist_capability"');
-
-// read_applicant_profile: a missing file should fail clean (JSON, ok:false), never throw --
-// same "no source of ground truth to actually try this against" situation as module 3
-// (delegate)'s live-model round trip: the real resume is one specific user's machine, not
-// something a portable test suite should assume exists.
-const missingProfile = JSON.parse(await runTool('read_applicant_profile',
-  { path: 'D:/ATHENA/this-file-does-not-exist.pdf' }, true, [], () => {}, async () => ''));
-t('read_applicant_profile fails clean on a missing file (no throw, ok:false)',
-  missingProfile.ok === false && /not found/.test(missingProfile.failureReason), JSON.stringify(missingProfile));
 
 let threwContractViolation = false;
 try { registerModule({ name: 'malformed-test-module' }); } // missing capabilities + execute
