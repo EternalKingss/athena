@@ -26,9 +26,9 @@ Athena.bat          # Windows
 
 ## Running tests
 ```bash
-node regression.mjs
+node selfcheck.mjs
 ```
-All 55 tests must pass before submitting a PR.
+`selfcheck.mjs` must report 0 failed before submitting a PR (checks needing your data or Google login are skipped, not failed).
 
 ## Making changes
 
@@ -36,7 +36,7 @@ All 55 tests must pass before submitting a PR.
 1. Add the tool definition to the `TOOLS` array in `athena/tools.mjs`
 2. Add a handler in `runTool()` in the same file
 3. Add it to `classifyRisk()` with the appropriate tier (0, 1, or 2)
-4. Add a regression test in `regression.mjs`
+4. Add a test in `selfcheck.mjs`
 
 ### Adding a skill
 Create `skills/<name>/SKILL.md` with frontmatter:
@@ -62,7 +62,7 @@ open('athena/core.mjs', 'w').write(content)
 ```
 
 ## Pull request checklist
-- [ ] All 55 regression tests pass (`node regression.mjs`)
+- [ ] All 55 regression tests pass (`node selfcheck.mjs`)
 - [ ] No npm packages added
 - [ ] No em dashes or non-ASCII in source files
 - [ ] New tools have classifyRisk() tier assigned

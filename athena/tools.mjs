@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve, join, isAbsolute, delimiter } from 'node:path';
 import { exec, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import { BRAVE_KEY, AUTO } from './config.mjs';
+import { BRAVE_KEY } from './config.mjs';
 import { PATHS } from './paths.mjs';
 import { handleMemoryTool } from './memory.mjs';
 import { loadSkill, saveSkill, updateSkill, getSkillStatus, rollbackSkill, listSkillVersions } from './skills.mjs';
@@ -186,7 +186,10 @@ export const TOOLS = [
 // retry safe; now that Athena never escalates on its own, there is nothing to count.)
 
 export async function runTool(name, args, preApproved, sessionTodos, setSessionTodos, requestUserInput) {
-  const ok = preApproved || AUTO;
+  // The approval decision is made once, in core.mjs (which already folds AUTO_APPROVE in).
+  // This used to be `preApproved || AUTO`, which under AUTO_APPROVE ran an irreversible
+  // command even after the user answered "no" to it -- the one prompt AUTO still shows.
+  const ok = preApproved === true;
 
   // Audit every tool call (non-blocking, best-effort)
   logAuditEvent('tool_call', { tool: name, args }).catch(e => logError('auditEvent', e));
@@ -744,7 +747,21 @@ export function classifyRisk(name, args, machineProfile) {
       systemctl: new Set(['status', 'list-units', 'list-unit-files', 'is-active',
                           'is-enabled', 'is-failed', 'show', 'cat']),
     };
+    // Verbs that only report when called plainly but change the system with certain
+    // arguments: `ip link set wlan0 down`, `route delete`, `ipconfig /release`,
+    // `date -s`, `hostname newname`, `journalctl --vacuum-time`. Any of these arguments
+    // makes the call a write.
+    const MUTATING_ARGS = {
+      ip:         /^(add|del|delete|set|flush|change|replace|append|prepend|up|down|exec|netns|monitor)$/,
+      route:      /^(add|del|delete|change|flush|-f|-p)$/,
+      ipconfig:   /^\/(release|release6|renew|renew6|flushdns|registerdns|setclassid|setclassid6)$/,
+      date:       /^(-s|--set|\d.*)$/,
+      hostname:   /^[^-]/,
+      journalctl: /^--(vacuum-\w+|rotate|flush|sync|relinquish-var|setup-keys)(=.*)?$/,
+    };
     const subIsRead = (verb, seg) => {
+      const mut = MUTATING_ARGS[verb];
+      if (mut && seg.split(/\s+/).slice(1).some(a => a && mut.test(a.toLowerCase()))) return false;
       const allowed = SUB_READ_ONLY[verb];
       if (!allowed) return true;                       // not a multiplexer
       const sub = (seg.split(/\s+/)[1] || '').toLowerCase().replace(/^--/, '');
@@ -760,6 +777,12 @@ export function classifyRisk(name, args, machineProfile) {
 
     if (/[>]|\btee\b/.test(cmd))
       return { tier: 2, reason: 'shell command that redirects output to a file' };
+
+    // Command substitution runs a second command inside an allowed one: `echo $(...)`,
+    // backticks, `<(...)`, and PowerShell's `(...)` / `$(...)` subexpressions. The
+    // segment's verb says nothing about what runs inside, so none of it is read-only.
+    if (/\$\(|`|<\(|\$\{|(^|\s)\(/.test(cmd))
+      return { tier: 2, reason: 'shell command containing a sub-command' };
 
     for (const seg of segments) {
       const verb = seg.toLowerCase().split(/[\s(]+/).filter(Boolean)[0] || '';

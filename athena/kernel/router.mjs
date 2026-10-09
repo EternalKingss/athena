@@ -58,6 +58,17 @@ export async function dispatch(capability, args, ctx = {}) {
   }
 
   const capDef = mod.capabilities.find(c => c.name === capability);
+
+  // core.mjs decides approval and passes it as ctx.preApproved. The system module checks
+  // it inside runTool; other modules never did, so a browser click the user answered
+  // "no" to (a purchase, say) was sent to Chrome anyway. Refuse here, once, for every
+  // module. Callers that make no decision at all (no preApproved key) are unaffected.
+  if (mod.name !== 'system' && ctx.preApproved === false) {
+    const msg = `Error: not approved -- "${capability}" was not run`;
+    record(makeEnvelope({ module: mod.name, capability, status: 'error', error: msg }));
+    return msg;
+  }
+
   let result;
   try {
     result = mod.name === 'system'

@@ -3,7 +3,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { hostname, cpus, totalmem, networkInterfaces } from 'node:os';
-import { execSync } from 'node:child_process';
+import { execSync, exec } from 'node:child_process';
+import { promisify } from 'node:util';
 import { join } from 'node:path';
 import { PATHS } from './paths.mjs';
 
@@ -275,16 +276,14 @@ export function machineTrend(fp) {
 const PS = s => 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand '
   + Buffer.from(s, 'utf16le').toString('base64');
 
-function safeExec(cmd, timeoutMs) {
+// Async on purpose: these PowerShell queries take seconds each, and execSync froze the
+// whole process -- UI server, browser relay, watcher -- for up to ~30s per capture.
+const _execAsync = promisify(exec);
+async function safeExec(cmd, timeoutMs) {
   try {
-    // execSync inherits stderr by default, so PowerShell's CLIXML progress records were
-    // printed straight into the user's terminal on every capture. The data only ever came
-    // from stdout; stderr here is noise.
-    return execSync(cmd, {
-      timeout: timeoutMs || 8000,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
+    // stderr is ignored: PowerShell's CLIXML progress records land there and are noise.
+    const { stdout } = await _execAsync(cmd, { timeout: timeoutMs || 8000, windowsHide: true, maxBuffer: 4 * 1024 * 1024 });
+    return String(stdout || '').trim();
   } catch { return ''; }
 }
 
@@ -294,37 +293,37 @@ export async function captureRuntimeState() {
 
   // Process list
   if (isWin) {
-    const raw = safeExec(PS('Get-Process | ForEach-Object { $_.Name + "(" + $_.Id + ")" }'), 10000);
+    const raw = await safeExec(PS('Get-Process | ForEach-Object { $_.Name + "(" + $_.Id + ")" }'), 10000);
     st.processes = raw.split('\n').filter(Boolean).map(l => l.trim());
   } else {
-    const raw = safeExec('ps -eo comm,pid --no-headers 2>/dev/null | head -150', 5000);
+    const raw = await safeExec('ps -eo comm,pid --no-headers 2>/dev/null | head -150', 5000);
     st.processes = raw.split('\n').filter(Boolean).map(l => l.trim());
   }
 
   // Listening ports
   if (isWin) {
-    const raw = safeExec(PS('Get-NetTCPConnection -State Listen | ForEach-Object { $_.LocalPort } | Sort-Object -Unique'), 8000);
+    const raw = await safeExec(PS('Get-NetTCPConnection -State Listen | ForEach-Object { $_.LocalPort } | Sort-Object -Unique'), 8000);
     st.listeningPorts = raw.split('\n').map(l => l.trim()).filter(Boolean);
   } else {
-    const raw = safeExec('ss -tlnp 2>/dev/null | awk \'NR>1{print $4}\' | sed \'s/.*://\' | sort -u', 5000);
+    const raw = await safeExec('ss -tlnp 2>/dev/null | awk \'NR>1{print $4}\' | sed \'s/.*://\' | sort -u', 5000);
     st.listeningPorts = raw.split('\n').filter(Boolean);
   }
 
   // Loaded drivers/modules
   if (isWin) {
-    const raw = safeExec(PS('Get-CimInstance Win32_SystemDriver | Where-Object { $_.State -eq "Running" } | Select-Object -ExpandProperty Name | Sort-Object'), 10000);
+    const raw = await safeExec(PS('Get-CimInstance Win32_SystemDriver | Where-Object { $_.State -eq "Running" } | Select-Object -ExpandProperty Name | Sort-Object'), 10000);
     st.drivers = raw.split('\n').map(l => l.trim()).filter(Boolean);
   } else {
-    const raw = safeExec('lsmod 2>/dev/null | awk \'NR>1{print $1}\' | sort', 5000);
+    const raw = await safeExec('lsmod 2>/dev/null | awk \'NR>1{print $1}\' | sort', 5000);
     st.modules = raw.split('\n').filter(Boolean);
   }
 
   // Established connection count (canary for unexpected outbound activity)
   if (isWin) {
-    const raw = safeExec(PS('(Get-NetTCPConnection -State Established | Measure-Object).Count'), 5000);
+    const raw = await safeExec(PS('(Get-NetTCPConnection -State Established | Measure-Object).Count'), 5000);
     st.establishedConnections = parseInt(raw, 10) || 0;
   } else {
-    const raw = safeExec('ss -tnp state established 2>/dev/null | wc -l', 3000);
+    const raw = await safeExec('ss -tnp state established 2>/dev/null | wc -l', 3000);
     st.establishedConnections = Math.max(0, (parseInt(raw, 10) || 1) - 1);
   }
 

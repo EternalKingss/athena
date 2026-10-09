@@ -539,6 +539,10 @@ export async function crystallize(goal, toolTrace, emit) {
     let parsed;
     try { parsed = JSON.parse((res.content || '').trim()); } catch { return; }
     if (!parsed || !parsed.repeatable || !parsed.skillName) return;
+    // The cheap model is asked for kebab-case but does not always comply; normalise it so
+    // the name passes skills.mjs's directory-name check instead of failing silently.
+    parsed.skillName = String(parsed.skillName).toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[-.]+|-+$/g, '').replace(/\.\.+/g, '.').slice(0, 80);
+    if (!parsed.skillName) return;
     const existing = scanSkills().find(s => s.dir === parsed.skillName);
     if (existing) {
       await updateSkill(parsed.skillName, parsed.description, parsed.content, 'unverified');
@@ -572,7 +576,11 @@ async function offlineNetworkReport(ask, emit) {
     ? 'The internet is working, but the AI provider is not answering -- nothing on this machine to fix.'
     : "I'm offline, so the only thing I'm working on is getting the connection back.", ''];
 
-  if (tri && tri.layer && LAYER_TEXT[tri.layer]) {
+  if (tri && tri.layer === 'ok') {
+    // The probe reached the AI host on port 443, yet the HTTPS request still failed.
+    lines.push('What I measured: the network itself looks fine -- the AI server answers -- but secure (HTTPS) requests to it fail.');
+    lines.push('That is usually a proxy, firewall or antivirus intercepting HTTPS, or the computer clock being wrong (check the date and time).');
+  } else if (tri && tri.layer && LAYER_TEXT[tri.layer]) {
     lines.push('What I measured: ' + LAYER_TEXT[tri.layer] + '.');
     const tried = (tri.steps || []).map(st => st.fixId);
     lines.push(tried.length ? 'What I tried: ' + tried.join(', ') + ' -- the connection is still down.' : 'What I tried: nothing applied automatically.');

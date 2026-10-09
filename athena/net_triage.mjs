@@ -13,6 +13,7 @@
 //
 // Layers, in the order they are checked:
 //   captive           -- a hotel/cafe login page intercepts traffic -> tell the user to sign in
+//   wifi-missing      -- Windows cannot see the Wi-Fi adapter     -> rescan devices, then replug advice
 //   wifi-service      -- WLAN AutoConfig stopped (Windows)       -> start it
 //   wifi-disabled     -- Wi-Fi adapter disabled                  -> enable it
 //   wifi-radio-off    -- radio off / airplane mode               -> turn it on where an OS command exists
@@ -23,6 +24,10 @@
 //   stack   -- valid IP, nothing reachable                 -> NOT automatic, see below
 // The Wi-Fi layers are only considered when no other adapter has a working address -- a
 // machine on Ethernet with Wi-Fi off is not a Wi-Fi problem.
+// When the built-in ladder runs out, fixes this machine has LEARNED (recorded online by
+// Claude via learn_fix, network-tagged, and proven by their own verify step) are tried
+// next -- the hard-coded list covers what is predictable, the learned list covers what
+// is peculiar to this machine.
 //
 // The winsock / IP-stack reset is never run here. It needs a reboot to take effect, and it
 // wipes VPN and other layered-provider entries -- that is a decision for the user, made
@@ -60,6 +65,7 @@ const PORTAL_CHECK = { host: 'connectivitycheck.gstatic.com', path: '/generate_2
 // empty = nothing safe to automate; the advice text says what the user has to do.
 const LADDER = {
   win32: {
+    'wifi-missing':      [{ action: 'rescan-devices' }],
     'wifi-service':      [{ action: 'start-wlansvc' }],
     'wifi-disabled':     [{ action: 'enable-wifi-adapter' }],
     'wifi-disconnected': [{ action: 'connect-known-wifi' }],
@@ -163,12 +169,15 @@ function addressSummary() {
 // the Wi-Fi layers are skipped -- triage falls back to the address/DNS layers.
 
 // Get-NetAdapter ... | ConvertTo-Json  ->  the first physical 802.11 adapter
+// With several Wi-Fi adapters (built-in plus a USB dongle) the most usable one decides.
+const WIN_STATUS_RANK = { up: 0, disconnected: 1, disabled: 2, 'not present': 3 };
 export function parseWinAdapters(json) {
   let list;
   try { list = JSON.parse(String(json || '').trim() || 'null'); } catch { return null; }
   if (!list) return null;
   if (!Array.isArray(list)) list = [list];
-  const a = list.find(x => x && x.Name) || null;
+  const rank = a => WIN_STATUS_RANK[String(a.Status || '').toLowerCase()] ?? 1;
+  const a = list.filter(x => x && x.Name).sort((x, y) => rank(x) - rank(y))[0] || null;
   return a ? { device: a.Name, status: String(a.Status || '') } : null;
 }
 
@@ -221,8 +230,11 @@ export function parseNmConnections(text) {
 
 async function readWifiWin() {
   const ad = parseWinAdapters((await run('powershell', ['-NoProfile', '-Command',
-    'Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.NdisPhysicalMedium -eq 9 } | Select-Object Name,Status | ConvertTo-Json -Compress'])).out);
+    'Get-NetAdapter -Physical -IncludeHidden -ErrorAction SilentlyContinue | Where-Object { $_.NdisPhysicalMedium -eq 9 } | Select-Object Name,Status | ConvertTo-Json -Compress'])).out);
   if (!ad) return null;
+  // "Not Present": Windows knows the adapter but cannot see it now -- a USB dongle that
+  // is unplugged or failed to enumerate on a cold boot, or a driver that did not load.
+  if (/not present/i.test(ad.status)) return { present: true, missing: true, device: ad.device, known: [], inRange: [] };
   const w = { present: true, device: ad.device, disabled: /^disabled$/i.test(ad.status), known: [], inRange: [] };
   if (w.disabled) return w;
   const ifc = parseNetshInterfaces((await run('netsh', ['wlan', 'show', 'interfaces'])).out);
@@ -288,6 +300,9 @@ async function wifiAction(name, w) {
   switch (name) {
     case 'start-wlansvc':
       return run('net', ['start', 'wlansvc']);
+    case 'rescan-devices':
+      // Re-enumerates hardware, which brings back a USB adapter that failed to start.
+      return run('pnputil', ['/scan-devices'], 30000);
     case 'enable-wifi-adapter':
       if (!dev) return { ok: false, out: 'no Wi-Fi adapter name' };
       return run('powershell', ['-NoProfile', '-Command', "Enable-NetAdapter -Name '" + String(dev).replace(/'/g, "''") + "' -Confirm:$false"]);
@@ -342,6 +357,7 @@ export function diagnose(p) {
   if (p.hostReachable) return 'ok';
   const w = p.wifi;
   if (w && w.present && p.routable === 0) {
+    if (w.missing) return 'wifi-missing';
     if (w.serviceStopped) return 'wifi-service';
     if (w.disabled) return 'wifi-disabled';
     if (w.radioOff) return 'wifi-radio-off';
@@ -357,7 +373,7 @@ export function diagnose(p) {
 // Layers that mean "this machine has no working internet" -- as opposed to 'provider',
 // where the internet is fine and only the AI service is down.
 export const NETWORK_DOWN_LAYERS = new Set([
-  'captive', 'wifi-service', 'wifi-disabled', 'wifi-radio-off', 'wifi-disconnected',
+  'captive', 'wifi-missing', 'wifi-service', 'wifi-disabled', 'wifi-radio-off', 'wifi-disconnected',
   'adapter', 'dhcp', 'dns', 'stack',
 ]);
 
@@ -368,6 +384,7 @@ export function stackResetFixId(platform = process.platform) {
 
 export const LAYER_TEXT = {
   captive:             'a sign-in page (hotel, airport, cafe Wi-Fi) is intercepting the connection',
+  'wifi-missing':      'Windows cannot see the Wi-Fi adapter (unplugged, or its driver did not start)',
   'wifi-service':      'the Windows Wi-Fi service (WLAN AutoConfig) is stopped',
   'wifi-disabled':     'the Wi-Fi adapter is disabled',
   'wifi-radio-off':    'Wi-Fi is switched off (radio off or airplane mode)',
@@ -385,6 +402,8 @@ function adviceFor(layer, platform, p) {
   switch (layer) {
     case 'captive':
       return 'Open any website in the browser, complete the sign-in page, then send your message again.';
+    case 'wifi-missing':
+      return 'If it is a USB Wi-Fi adapter, unplug it and plug it back in (another port if possible). Otherwise restart the computer -- the driver did not start.';
     case 'wifi-service':
       return 'Starting it needs admin -- run Athena as administrator, or restart the computer.';
     case 'wifi-disabled':
@@ -417,7 +436,25 @@ async function settle(host, probeFn, settleMs) {
   return p;
 }
 
-function stepKey(step) { return typeof step === 'string' ? step : 'action:' + step.action; }
+function stepKey(step) {
+  if (typeof step === 'string') return step;
+  return step.learned ? 'learned:' + step.learned : 'action:' + step.action;
+}
+const stepLabel = key => key.replace(/^(action|learned):/, '');
+
+const NETWORK_TAGS = /^(network|wifi|wi-fi|wireless|adapter|dhcp|dns|wlan|nic)$/i;
+// This machine's own proven network fixes (never the generic library entries -- those
+// are already in the ladder). Highest confidence first, at most two.
+async function learnedNetworkFixes() {
+  try {
+    const { listFixes } = await import('./machine_fixes.mjs');
+    return (listFixes() || [])
+      .filter(f => f && f.source !== 'library' && f.status === 'proven' && (f.tags || []).some(t => NETWORK_TAGS.test(String(t))))
+      .sort((a, b) => (b.confidence || 0) - (a.confidence || 0))
+      .slice(0, 2)
+      .map(f => f.id);
+  } catch { return []; }
+}
 
 // deps lets selfcheck drive the ladder with a scripted probe and a fake apply, so the
 // decision logic is tested without touching a real network adapter.
@@ -438,6 +475,10 @@ async function runTriage(host, platform, deps = {}, { applyFixes = true } = {}) 
   }
 
   const apply = deps.apply || (async (step, probeNow) => {
+    if (step.learned) {
+      const { applyFix } = await import('./machine_fixes.mjs');
+      return applyFix(step.learned);   // no force: its own detect decides whether it applies
+    }
     if (typeof step === 'string') {
       const { applyFix } = await import('./machine_fixes.mjs');
       // force: the probe already established the symptom, more precisely than the
@@ -447,20 +488,26 @@ async function runTriage(host, platform, deps = {}, { applyFixes = true } = {}) 
     return wifiAction(step.action, probeNow.wifi);
   });
 
-  for (let round = 0; round < MAX_ROUNDS; round++) {
-    const step = (ladder[layer] || []).find(st => !tried.has(stepKey(st)));
+  let learnedQueue = null;
+  for (let round = 0; round < MAX_ROUNDS + 2; round++) {
+    let step = (ladder[layer] || []).find(st => !tried.has(stepKey(st)));
+    if (!step && NETWORK_DOWN_LAYERS.has(layer) && layer !== 'captive') {
+      if (learnedQueue === null) learnedQueue = await (deps.learnedFixes || learnedNetworkFixes)();
+      const id = learnedQueue.find(x => !tried.has('learned:' + x));
+      if (id) step = { learned: id };
+    }
     if (!step) break;
     const key = stepKey(step);
     tried.add(key);
-    report('Applying ' + key.replace(/^action:/, '') + ' ...');
+    report('Applying ' + stepLabel(key) + (step.learned ? ' (learned on this machine)' : '') + ' ...');
     let res;
     try { res = await apply(step, p); }
     catch (e) { res = { ok: false, message: e.message }; }
-    steps.push({ layer, fixId: key.replace(/^action:/, ''), ok: !!(res && res.ok) });
+    steps.push({ layer, fixId: stepLabel(key), learned: !!step.learned, ok: !!(res && res.ok) });
     p = await settle(host, probeFn, settleMs);
     const next = diagnose(p);
     if (next === 'ok') {
-      report('Connection restored by ' + key.replace(/^action:/, '') + '.');
+      report('Connection restored by ' + stepLabel(key) + '.');
       return { restored: true, layer, steps, networkDown: false };
     }
     if (next !== layer) report('Now: ' + LAYER_TEXT[next] + '.');

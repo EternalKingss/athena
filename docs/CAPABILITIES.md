@@ -389,11 +389,12 @@ pressing send. The Google sign-in expires every 7 days -- re-run the setup scrip
 
 ## Self-check
 
-`node selfcheck.mjs` from the Athena root runs 14 checks across module parsing, intent
-routing, the approval gates, tool registration, machine identity, memory scoping, the repair
-contract, and a clean boot. All 14 should pass.
+`node selfcheck.mjs` from the Athena root runs ~80 checks: module parsing, approval gates and their
+enforcement, shell risk classification, network triage (every Wi-Fi layer, with real-format
+`netsh`/`nmcli` output), stall protection, the browser relay, routing, and a live boot. Checks that need
+your own data or a Google login are skipped, not failed. It should report 0 failed.
 
 ---
 
-*Athena · runs from the drive · L2 control engine, L3 local weights, L4 cloud ·
-36 tools, 12 diagnostics, 22 repairs*
+*Athena v3.4 · runs from the drive · Claude for everything, local model for basic commands,
+hard-coded Wi-Fi recovery offline · 50 tools, 25 built-in repairs*
