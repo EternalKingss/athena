@@ -172,7 +172,7 @@ export const TOOLS = [
   { type: 'function', function: { name: 'audit_replay', description: 'Replay the audit trail for a given date. Shows all tool calls and session events with timestamps.', parameters: { type: 'object', properties: { date: { type: 'string', description: 'YYYY-MM-DD format (default: today)' } } } } },
   { type: 'function', function: { name: 'machine_health_trend', description: 'Show longitudinal health trend for this machine: visit history, capability changes over time, usage frequency, and any detected deterioration patterns.', parameters: { type: 'object', properties: {} } } },
   { type: 'function', function: { name: 'machine_diff', description: 'Compare the current machine state against the last saved fingerprint. Shows what tools, languages, or hardware changed since the last visit.', parameters: { type: 'object', properties: {} } } },
-  { type: 'function', function: { name: 'remediate', description: 'Get a guided remediation plan for a security or system issue. Returns exact commands to fix the problem. Set execute:true to apply the fix (requires approval).', parameters: { type: 'object', properties: { issue: { type: 'string', description: 'The issue to fix, e.g. "firewall not enabled", "ssh root login allowed", "pending updates"' }, execute: { type: 'boolean' } }, required: ['issue'] } } },
+  { type: 'function', function: { name: 'remediate', description: 'Get a guided remediation plan for a security or system issue. Returns exact commands to fix the problem. Set execute:true to apply the fix.', parameters: { type: 'object', properties: { issue: { type: 'string', description: 'The issue to fix, e.g. "firewall not enabled", "ssh root login allowed", "pending updates"' }, execute: { type: 'boolean' } }, required: ['issue'] } } },
   { type: 'function', function: { name: 'machine_fixes', description: 'List remediations learned specifically for THIS machine, and check which ones currently apply. Use this before generic remediation -- a machine-specific fix beats a generic playbook. Pass detect:true to run each fix\'s detect command and see what applies right now.', parameters: { type: 'object', properties: { detect: { type: 'boolean' } } } } },
   { type: 'function', function: { name: 'learn_fix', description: 'Record a remediation that is specific to this machine, so it survives across sessions and reboots. Requires a verify command -- without a way to prove it worked, a fix is only a stored guess. Use after you have diagnosed something the generic playbooks do not cover.', parameters: { type: 'object', properties: { title: { type: 'string' }, symptom: { type: 'string', description: 'What the user observes when this is wrong.' }, detect: { type: 'object', description: '{cmd, expect} -- a command plus a regex whose match means the symptom IS present.' }, steps: { type: 'array', items: { type: 'string' }, description: 'Commands to run, in order.' }, verify: { type: 'object', description: '{cmd, expect} -- a command plus a regex whose match means the fix WORKED.' }, explain: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } } }, required: ['title', 'steps', 'verify'] } } },
   { type: 'function', function: { name: 'fix_issues', description: 'Detect every fix that currently applies to this machine and apply the ones you choose, lowest risk first, verifying after each and stopping if one fails. This is the "just fix it" path: call machine_fixes with detect:true first to see what applies, then call this with those ids. Never pass ids you have not shown the user.', parameters: { type: 'object', properties: { ids: { type: 'array', items: { type: 'string' } }, dry_run: { type: 'boolean' } }, required: ['ids'] } } },
@@ -447,7 +447,7 @@ export async function runTool(name, args, preApproved, sessionTodos, setSessionT
         '',
         `Explanation: ${plan.explain}`,
         '',
-        'Call remediate with execute:true to apply (requires approval).',
+        'Call remediate with execute:true to apply.',
       ];
       if (!plan.steps.length) lines.splice(5, 0, '  (no automated steps -- see explanation)');
       return lines.join('\n');
@@ -581,7 +581,7 @@ export function toolsForModel(model) {
 // ---- Operations that still ask, even with AUTO_APPROVE on ----
 // The test is not "is this dangerous" -- plenty of dangerous things are recoverable. The
 // test is: if the model got this wrong, can it be undone? Formatting a disk, wiping a
-// registry hive, or rebooting mid-work cannot. A single prompt is cheap insurance against
+// registry hive, or deleting the backups cannot. A single prompt is cheap insurance against
 // an unbounded loss; everything else runs without asking.
 //
 // Flight booking (phase 5) deliberately never gets a flight_book tool at all -- see
@@ -596,7 +596,9 @@ export function toolsForModel(model) {
 const PURCHASE_LIKE = /\b(place order|buy now|pay now|book now|confirm (order|purchase|payment|booking)|complete (purchase|order|booking|checkout)|checkout|finalize (order|booking))\b/i;
 
 const IRREVERSIBLE = [
-  { re: /\b(format|mkfs|diskpart)\b/i,                       why: 'formats or repartitions a disk' },
+  // The format COMMAND takes a drive letter. A bare \bformat\b also hit PowerShell's
+  // Format-Table / Format-List, so listing windows before closing an app asked for approval.
+  { re: /(^|[\s;&|"'(])format(\.com)?\s+[A-Za-z]:|\bFormat-Volume\b|\b(mkfs(\.\w+)?|diskpart)\b/i, why: 'formats or repartitions a disk' },
   { re: /\bcipher\s+\/w\b/i,                                 why: 'securely wipes free space' },
   { re: /\breg\s+delete\b/i,                                 why: 'deletes registry keys' },
   // order-independent: any recursive delete verb + any root-ish target, however arranged
@@ -607,11 +609,17 @@ const IRREVERSIBLE = [
       const rootTarget = /(^|[\s'"])([A-Za-z]:\\?)([\s'"]|$)/.test(text)      // C:\  or  C:
         || /(^|[\s'"])\/([\s'"]|$)/.test(text)                                  // bare /
         || /\$env:SystemRoot|%SystemRoot%|%SystemDrive%/i.test(text)
-        || /[A-Za-z]:\\(Windows|Users|Program Files)([\s'"\\]|$)/i.test(text)
+        // The system folders themselves, or a whole user profile -- not ordinary files
+        // inside them (C:\Users\me\AppData\Local\Temp\x is a normal cleanup).
+        || /[A-Za-z]:\\(Windows|Users|Program Files( \(x86\))?|ProgramData)\\?([\s'"]|$)/i.test(text)
+        || /[A-Za-z]:\\Windows\\(System32|SysWOW64|WinSxS|Boot)([\s'"\\]|$)/i.test(text)
+        || /[A-Za-z]:\\Users\\[^\\\s'"]+\\?([\s'"]|$)/i.test(text)
         || /(^|[\s'"])(~|\/home|\/etc|\/usr|\/var|\/boot)([\s'"\/]|$)/.test(text);
       return recursiveDelete && rootTarget;
     }, why: 'recursive delete targeting a drive root or system directory' },
-  { re: /\b(shutdown|Restart-Computer|Stop-Computer)\b/i,     why: 'reboots or shuts down the machine' },
+  // Reboots are NOT here: disruptive, but the machine comes back. Only things that
+  // destroy the system or its data ask.
+  { re: /\bvssadmin\b.*\bdelete\b|\bwbadmin\b.*\bdelete\b|\bshadowcopy\b.*\bdelete\b/i, why: 'deletes backups / restore points' },
   { re: /\bbcdedit\b/i,                                      why: 'changes boot configuration' },
   { re: /\bClear-Disk\b/i,                                   why: 'erases a disk' },
 ];

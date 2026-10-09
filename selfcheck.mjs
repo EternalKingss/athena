@@ -75,11 +75,13 @@ t(ROUTER_NOT_BASIC.length + ' router non-candidates stay with Claude',
 
 const { irreversibleReason, classifyRisk, TOOLS, runTool } = await import('./athena/tools.mjs');
 const R = c => irreversibleReason('run_shell', { command: c });
-t('irreversible intact', ['rm -rf /','format C:','shutdown /r /t 0','Remove-Item C:\\ -Recurse -Force'].every(R));
+t('irreversible intact', ['rm -rf /','format C:','format.com D: /q','diskpart','vssadmin delete shadows /all /quiet','Remove-Item C:\\ -Recurse -Force','Remove-Item C:\\Windows\\System32 -Recurse -Force','Remove-Item C:\\Users\\me -Recurse -Force'].every(R));
+t('everyday commands do not ask', ['Get-Process | Format-Table Name,Id','Get-Process | Format-List','Stop-Process -Name Spotify -Force','taskkill /IM spotify.exe /F','shutdown /r /t 0','Restart-Computer -Force','Remove-Item C:\\Users\\me\\AppData\\Local\\Temp\\x -Recurse -Force'].every(c => !R(c)));
 t('safe not flagged', ['ls','ipconfig /flushdns','Remove-Item .\\\\tmp.txt'].every(c => !R(c)));
 t('chained destructive tier 2', classifyRisk('run_shell',{command:'ls && Remove-Item D:\\\\x -Recurse -Force'}).tier === 2);
 t('chained read-only tier 1', classifyRisk('run_shell',{command:'ls && pwd'}).tier === 1);
-t('apply_fix gate sees stored steps', irreversibleReason('apply_fix',{id:'clear-windows-update-cache'}) !== null);
+// Clearing the update download cache is routine (Windows rebuilds it) -- it must not ask.
+t('apply_fix routine cache clear does not ask', irreversibleReason('apply_fix',{id:'clear-windows-update-cache'}) === null);
 
 // Only purchase/checkout clicks are gated. See tools.mjs's PURCHASE_LIKE comment.
 t('browser_click purchase-like tier 2',
@@ -365,6 +367,22 @@ _resetTriageForTests();
 triRes = await triageNetwork({ host: 'api.example', platform: 'win32', deps: tri.deps });
 t('triage: Wi-Fi adapter not present -> device rescan, restored',
   triRes.restored === true && tri.applied.join() === 'action:rescan-devices', JSON.stringify({ triRes, applied: tri.applied }));
+t('PnP fallback: a USB Wi-Fi dongle gone from Get-NetAdapter is still found (missing)',
+  NT.parseWinPnpWifi('[{"FriendlyName":"Microsoft Wi-Fi Direct Virtual Adapter","Status":"Unknown","Present":false},{"FriendlyName":"D-Link AC13U AC1300 Wi-Fi 5 USB Adapter","Status":"Unknown","Present":false,"InstanceId":"USB-X"}]').device.startsWith('D-Link') &&
+  NT.parseWinPnpWifi('[{"FriendlyName":"Realtek PCIe GbE","Status":"OK","Present":true}]') === null &&
+  NT.parseWinPnpWifi('{"FriendlyName":"Intel Wireless-AC 9560","Status":"Error","Present":true,"InstanceId":"PCI-Y"}').broken.length === 1);
+tri = scripted(P({ routable: 0 }), P({ routable: 0 }));
+_resetTriageForTests();
+triRes = await triageNetwork({ host: 'api.example', platform: 'win32', deps: tri.deps });
+t('triage: adapter bounce fails -> device rescan, then USB re-enumerate',
+  tri.applied.join() === 'adapter-bounce,action:rescan-devices,action:usb-reenumerate,action:usb-controller-reset', JSON.stringify(tri.applied));
+_resetTriageForTests();
+tri = scripted(P({ routable: 0, wifi: W({ missing: true }) }), P({ routable: 0, wifi: W({ missing: true }) }));
+_resetTriageForTests();
+triRes = await triageNetwork({ host: 'api.example', platform: 'win32', deps: tri.deps });
+t('triage: rescan does not bring the dongle back -> USB re-enumerate, then controller reset',
+  tri.applied.join() === 'action:rescan-devices,action:usb-reenumerate,action:usb-controller-reset', JSON.stringify(tri.applied));
+_resetTriageForTests();
 t('Get-NetAdapter: the usable adapter wins over a Not Present one',
   NT.parseWinAdapters('[{"Name":"Wi-Fi","Status":"Not Present"},{"Name":"Wi-Fi 2","Status":"Up"}]').device === 'Wi-Fi 2');
 
