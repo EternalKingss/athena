@@ -65,11 +65,11 @@ const PORTAL_CHECK = { host: 'connectivitycheck.gstatic.com', path: '/generate_2
 // empty = nothing safe to automate; the advice text says what the user has to do.
 const LADDER = {
   win32: {
-    'wifi-missing':      [{ action: 'rescan-devices' }],
+    'wifi-missing':      [{ action: 'rescan-devices' }, { action: 'usb-reenumerate' }, { action: 'usb-controller-reset' }],
     'wifi-service':      [{ action: 'start-wlansvc' }],
     'wifi-disabled':     [{ action: 'enable-wifi-adapter' }],
     'wifi-disconnected': [{ action: 'connect-known-wifi' }],
-    adapter: ['adapter-bounce'], dhcp: ['dhcp-renew'], dns: ['dns-cache-flush'],
+    adapter: ['adapter-bounce', { action: 'rescan-devices' }, { action: 'usb-reenumerate' }, { action: 'usb-controller-reset' }], dhcp: ['dhcp-renew'], dns: ['dns-cache-flush'],
   },
   linux: {
     'wifi-disabled':     [{ action: 'nm-radio-on' }, { action: 'nm-connect' }],
@@ -181,6 +181,22 @@ export function parseWinAdapters(json) {
   return a ? { device: a.Name, status: String(a.Status || '') } : null;
 }
 
+// Get-PnpDevice -Class Net | ConvertTo-Json  ->  is there a Wi-Fi device Windows knows of?
+// A USB dongle that lost the cold-boot enumeration race is gone from Get-NetAdapter
+// entirely (even with -IncludeHidden); only PnP still remembers it, as Present=false or
+// with a driver error. Wi-Fi Direct virtual adapters are not real radios and are skipped.
+export function parseWinPnpWifi(json) {
+  let list;
+  try { list = JSON.parse(String(json || '').trim() || 'null'); } catch { return null; }
+  if (!list) return null;
+  if (!Array.isArray(list)) list = [list];
+  const wifi = list.filter(d => d && /wi-?fi|wireless|wlan|802\.11/i.test(String(d.FriendlyName || ''))
+    && !/wi-?fi direct|virtual/i.test(String(d.FriendlyName || '')));
+  if (!wifi.length) return null;
+  const broken = wifi.filter(d => d.Present !== false && !/^ok$/i.test(String(d.Status || '')));
+  return { device: String(wifi[0].FriendlyName), broken: broken.map(d => String(d.InstanceId || '')).filter(Boolean) };
+}
+
 export function parseNetshInterfaces(text) {
   const t = String(text || '');
   if (/wlansvc|AutoConfig Service .*is not running/i.test(t)) return { serviceStopped: true };
@@ -231,7 +247,11 @@ export function parseNmConnections(text) {
 async function readWifiWin() {
   const ad = parseWinAdapters((await run('powershell', ['-NoProfile', '-Command',
     'Get-NetAdapter -Physical -IncludeHidden -ErrorAction SilentlyContinue | Where-Object { $_.NdisPhysicalMedium -eq 9 } | Select-Object Name,Status | ConvertTo-Json -Compress'])).out);
-  if (!ad) return null;
+  if (!ad) {
+    const pnp = parseWinPnpWifi((await run('powershell', ['-NoProfile', '-Command',
+      'Get-PnpDevice -Class Net -ErrorAction SilentlyContinue | Select-Object FriendlyName,Status,Present,InstanceId | ConvertTo-Json -Compress'])).out);
+    return pnp ? { present: true, missing: true, device: pnp.device, known: [], inRange: [] } : null;
+  }
   // "Not Present": Windows knows the adapter but cannot see it now -- a USB dongle that
   // is unplugged or failed to enumerate on a cold boot, or a driver that did not load.
   if (/not present/i.test(ad.status)) return { present: true, missing: true, device: ad.device, known: [], inRange: [] };
@@ -301,8 +321,42 @@ async function wifiAction(name, w) {
     case 'start-wlansvc':
       return run('net', ['start', 'wlansvc']);
     case 'rescan-devices':
-      // Re-enumerates hardware, which brings back a USB adapter that failed to start.
-      return run('pnputil', ['/scan-devices'], 30000);
+    {
+      // Re-enumerates hardware, which brings back a USB adapter that failed to start;
+      // then restarts any Wi-Fi device that enumerated but whose driver errored.
+      const scan = await run('pnputil', ['/scan-devices'], 30000);
+      await new Promise(res => setTimeout(res, 5000));
+      const pnp = parseWinPnpWifi((await run('powershell', ['-NoProfile', '-Command',
+        'Get-PnpDevice -Class Net -ErrorAction SilentlyContinue | Select-Object FriendlyName,Status,Present,InstanceId | ConvertTo-Json -Compress'])).out);
+      let out = scan.out;
+      for (const idn of (pnp && pnp.broken) || []) out += (await run('pnputil', ['/restart-device', idn], 30000)).out;
+      return { ok: scan.ok, out };
+    }
+    case 'usb-reenumerate': {
+      // A dongle that loses the cold-boot race shows up as "Unknown USB Device (Device
+      // Descriptor Request Failed)" -- the port saw something but never learned what it was.
+      // A rescan does not retry it. Removing that node and restarting its parent hub makes
+      // the port enumerate again: a software unplug/replug. Other devices on the same hub
+      // drop for a second or two.
+      const ps = "$n=0; Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -match '^USB.VID_0000' -or $_.FriendlyName -match 'Descriptor Request Failed|Port Reset Failed|Set Address Failed' } | ForEach-Object { $p=(Get-PnpDeviceProperty -InstanceId $_.InstanceId -KeyName DEVPKEY_Device_Parent -ErrorAction SilentlyContinue).Data; pnputil /remove-device $_.InstanceId | Out-Null; if ($p) { pnputil /restart-device $p | Out-Null }; $n++ }; pnputil /scan-devices | Out-Null; 'reset ' + $n + ' failed USB device(s)'";
+      const r = await run('powershell', ['-NoProfile', '-Command', ps], 60000);
+      const n = parseInt((r.out.match(/reset (\d+)/) || [])[1] || '0', 10);
+      if (n > 0) await new Promise(res => setTimeout(res, 10000));   // dongle, driver, then association
+      return { ok: r.ok && n > 0, out: n > 0 ? r.out : 'no failed USB device found' };
+    }
+    case 'usb-controller-reset': {
+      // When a cold boot leaves the port with nothing on it at all (no device node, not even
+      // a failed one), there is nothing to re-enumerate. What a warm reboot does that fixes
+      // it is reset the USB host controller while the dongle is already powered. So do that:
+      // walk from the dongle's last-known device node up to its PCI host controller and
+      // restart it. Everything else on that controller (often a keyboard or mouse) drops for
+      // a few seconds. Unknown controller -> restart every USB host controller.
+      const ps = "$w = Get-PnpDevice -Class Net -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -match '^USB' -and $_.FriendlyName -match 'Wi-?Fi|Wireless|WLAN|802.11' } | Sort-Object { (Get-PnpDeviceProperty -InstanceId $_.InstanceId -KeyName DEVPKEY_Device_LastArrivalDate -ErrorAction SilentlyContinue).Data } -Descending | Select-Object -First 1; $c=$null; if ($w) { $c=$w.InstanceId; for ($i=0; $i -lt 8 -and $c -and $c -notmatch '^PCI'; $i++) { $c=(Get-PnpDeviceProperty -InstanceId $c -KeyName DEVPKEY_Device_Parent -ErrorAction SilentlyContinue).Data } }; $ctl = if ($c -match '^PCI') { @($c) } else { @(Get-PnpDevice -PresentOnly -Class USB -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -match '^PCI' } | ForEach-Object { $_.InstanceId }) }; foreach ($x in $ctl) { pnputil /restart-device $x | Out-Null }; 'restarted ' + $ctl.Count + ' USB controller(s)'";
+      const r = await run('powershell', ['-NoProfile', '-Command', ps], 90000);
+      const n = parseInt((r.out.match(/restarted (\d+)/) || [])[1] || '0', 10);
+      if (n > 0) await new Promise(res => setTimeout(res, 15000));   // controller, dongle, driver, association
+      return { ok: r.ok && n > 0, out: r.out };
+    }
     case 'enable-wifi-adapter':
       if (!dev) return { ok: false, out: 'no Wi-Fi adapter name' };
       return run('powershell', ['-NoProfile', '-Command', "Enable-NetAdapter -Name '" + String(dev).replace(/'/g, "''") + "' -Confirm:$false"]);
