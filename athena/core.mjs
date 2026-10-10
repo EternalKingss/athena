@@ -5,7 +5,7 @@ import { classifyRisk, previewCall, irreversibleReason } from './tools.mjs';
 import { dispatch } from './kernel/router.mjs';
 import { toolsForModel } from './kernel/toolSurface.mjs';
 import { loadFingerprint } from './machines.mjs';
-import { tryLocalFirst } from './task_router.mjs';
+import { tryLocalFirst, isFollowUpToClaudeTask } from './task_router.mjs';
 import { saveSkill, updateSkill, scanSkills, recordSkillResult } from './skills.mjs';
 import { systemPrompt, offlineSystemPrompt } from './personality.mjs';
 import { AUTO, AUTO_ALL, state, ANTHROPIC_KEY, isOfflineMode, isLocalModelActive } from './config.mjs';
@@ -143,7 +143,7 @@ export async function turn(messages, emit, opts = {}) {
   if (!opts.isolated && !opts.skipLocalRouting) {
     const lastUser = [...messages].reverse().find(m => m.role === 'user');
     const userText = typeof lastUser?.content === 'string' ? lastUser.content : '';
-    if (userText) {
+    if (userText && !isFollowUpToClaudeTask(messages)) {
       const routed = await tryLocalFirst(userText, emit).catch(() => ({ handled: false }));
       if (routed.handled) {
         messages.push({ role: 'assistant', content: routed.finalText || '(done)' });

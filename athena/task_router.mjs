@@ -50,6 +50,23 @@ const ROUTER_SYSTEM_PROMPT =
   "do not just describe what you would do. When done, reply with a normal, " +
   "short confirmation.";
 
+// True when the turn before this message was Claude doing tool work. The local
+// model only ever sees the newest message, with no history, so a follow-up like
+// "just open a normal tab" in the middle of a Claude browser task reached it
+// stripped of everything it referred to -- and it opened google.com. Local
+// turns never leave tool_calls in the history (only their final text), so a
+// tool_calls message between the previous user message and this one means
+// Claude was mid-task, and the follow-up stays with Claude.
+export function isFollowUpToClaudeTask(messages = []) {
+  let i = messages.length - 1;
+  while (i >= 0 && messages[i].role !== 'user') i--;     // the current message
+  for (i--; i >= 0 && messages[i].role !== 'user'; i--) {
+    const m = messages[i];
+    if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length) return true;
+  }
+  return false;
+}
+
 // emit is the same event-callback turn() already threads through everywhere
 // else -- this just adds a couple of 'system' notices so it's visible in the
 // transcript when a message got routed locally instead of costing Claude.

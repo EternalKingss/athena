@@ -19,22 +19,24 @@
 // separate "reconnect" step needed. While Athena is running the poll loop
 // keeps the worker alive (see drainQueue).
 //
-// Athena gets her own working tab, separate from whatever the user is
-// actually looking at, in a window of its own opened without focus.
+// Athena gets her own working tab: a normal tab in the user's current window.
 // athenaTabId below is that tab: browser_navigate with no explicit tabId
-// reuses it (or opens a fresh window if it doesn't exist yet or was
-// closed), and every other tab-targeting command falls back to it instead of
-// Chrome's currently-active tab. Nothing here touches the user's own tabs
-// unless a command hands over an explicit tabId.
+// reuses it (or opens a new one if it doesn't exist yet or was closed), and
+// every other tab-targeting command falls back to it instead of whatever
+// tab the user is on. Nothing here touches the user's own tabs unless a
+// command hands over an explicit tabId.
 //
-// Why a window and not a background tab: Chrome barely services a tab that
-// is not on screen. Measured in Chromium 140 -- trusted clicks into a
-// background tab took 5s each and about half never landed until much
-// later, and half the screenshots stalled waiting for a frame. As the
-// active tab of its own window the same clicks land in ~15ms. The window is
-// still "not on screen" if it is minimized, or (on Windows/macOS) fully
-// covered by other windows, so slow input is detected and reported below
-// rather than assumed to have worked.
+// The tab is brought to the front whenever Athena navigates, clicks, types,
+// presses a key or takes a screenshot (showTab). Earlier versions kept it out
+// of sight -- first as a background tab, then in a separate unfocused window
+// -- and both failed in practice: Chrome barely services a tab that is not
+// on screen. Measured in Chromium 140, trusted clicks into a background tab
+// took 5s each and about half never landed until much later, half the
+// screenshots stalled waiting for a frame, and Chrome will not start audio
+// or video in a tab that has never been shown. A separate window counts as
+// hidden too once other windows cover it (Windows/macOS occlusion), which is
+// exactly how it failed on a real machine. Slow input is still detected and
+// reported below rather than assumed to have worked.
 //
 // Input is real: clicks and key presses go through CDP's Input domain
 // (Input.dispatchMouseEvent / Input.dispatchKeyEvent), so the page sees
@@ -56,7 +58,7 @@ const POLL_PERIOD_MINUTES = 0.5;
 // explicit tabId; cleared if the tab is closed (by the user or otherwise) so
 // the next navigate opens a fresh one instead of erroring forever.
 // Mirrored into chrome.storage.session so a service worker restart (MV3
-// kills idle workers) does not forget it and open yet another window.
+// kills idle workers) does not forget it and open yet another tab.
 let athenaTabId = null;
 
 async function loadAthenaTab() {
@@ -249,8 +251,8 @@ async function mouseClick(target, x, y) {
 const SLOW_INPUT_MS = 1500;
 function slowInputWarning(started, what) {
   if (Date.now() - started < SLOW_INPUT_MS) return undefined;
-  return `Chrome was slow to deliver this ${what} -- the tab is probably not on screen (minimized or covered). ` +
-    'It may land late: check with browser_snapshot before repeating it, and ask the user to keep Athena\'s window visible.';
+  return `Chrome was slow to deliver this ${what} -- Chrome is probably minimized or covered by another app. ` +
+    'It may land late: check with browser_snapshot before repeating it.';
 }
 
 // ---- Purchase guard -------------------------------------------------------
@@ -273,34 +275,49 @@ function guardRefusal(label, retry) {
 
 // ---- Actions --------------------------------------------------------------
 
+// Brings a tab to the front of its window, and its window out of the
+// minimized state, so Chrome actually renders it (see the header). It does
+// not raise Chrome above other apps -- only within Chrome.
+async function showTab(tabId) {
+  const tab = await chrome.tabs.get(tabId);
+  if (!tab.active) await chrome.tabs.update(tabId, { active: true });
+  try {
+    const win = await chrome.windows.get(tab.windowId);
+    if (win.state === 'minimized') await chrome.windows.update(tab.windowId, { state: 'normal' });
+  } catch { /* window gone mid-call -- the action will report it */ }
+  if (!tab.active) await sleep(150); // let the newly shown tab paint before acting on it
+}
+
 // Explicit tabId -> operate on that tab and adopt it as Athena's working tab
 // (so a follow-up command with no tabId continues on the same tab). No
-// tabId, an existing working tab -> reuse it. Neither -> open a new window
-// without focus, so navigating never steals the user's focus or touches
-// whatever tab they're actually looking at (see the header for why a window).
+// tabId, an existing working tab -> reuse it. Neither -> open a new tab in
+// the current window. Either way the tab ends up in front, so the page
+// loads, renders and can play media like any tab the user opened.
 async function navigate({ url, tabId }) {
   if (!url) throw new Error('browser_navigate needs a url');
 
   if (typeof tabId === 'number') {
-    await chrome.tabs.update(tabId, { url });
+    await chrome.tabs.update(tabId, { url, active: true });
     setAthenaTab(tabId);
+    await showTab(tabId);
     return { navigated: url, tabId };
   }
 
   if (await loadAthenaTab() !== null) {
     try {
       await chrome.tabs.get(athenaTabId); // throws if it's been closed
-      await chrome.tabs.update(athenaTabId, { url });
+      await chrome.tabs.update(athenaTabId, { url, active: true });
+      await showTab(athenaTabId);
       return { navigated: url, tabId: athenaTabId };
     } catch {
       setAthenaTab(null); // closed since last use -- open a fresh one below
     }
   }
 
-  const win = await chrome.windows.create({ url, focused: false, width: 1280, height: 860 });
-  const tab = win.tabs[0];
+  const tab = await chrome.tabs.create({ url, active: true });
   setAthenaTab(tab.id);
-  return { navigated: url, tabId: tab.id, window: 'opened Athena\'s own window (unfocused) -- keep it visible, not minimized, for reliable clicks' };
+  await showTab(tab.id);
+  return { navigated: url, tabId: tab.id };
 }
 
 // Numbers every visible interactive element ([12] button "Send") and tags it
@@ -315,6 +332,7 @@ async function click(args) {
   const { ref, selector, text, guard, tabId } = args;
   if (ref == null && !selector && !text) throw new Error('browser_click needs a ref, selector or text');
   const id = await resolveTabId(tabId);
+  await showTab(id);
   return withDebugger(id, async (target) => {
     const t = await pageEval(target, PREPARE_CLICK_BODY, { ref, selector, text });
     if (guardHits(guard, t.label)) {
@@ -340,6 +358,7 @@ async function click(args) {
 async function clickAt({ x, y, text, guard, tabId }) {
   if (typeof x !== 'number' || typeof y !== 'number') throw new Error('browser_click_at needs numeric x and y');
   const id = await resolveTabId(tabId);
+  await showTab(id);
   return withDebugger(id, async (target) => {
     const t = await pageEval(target, PREPARE_CLICK_AT_BODY, { x, y, text });
     if (guardHits(guard, t.label)) {
@@ -353,6 +372,7 @@ async function clickAt({ x, y, text, guard, tabId }) {
 async function typeText({ ref, selector, text, clear, tabId }) {
   if (typeof text !== 'string' || (!text && !clear)) throw new Error('browser_type needs text (or clear: true)');
   const id = await resolveTabId(tabId);
+  await showTab(id);
   return withDebugger(id, async (target) => {
     let field = null;
     if (ref != null || selector) field = await pageEval(target, FOCUS_BODY, { ref, selector, clear: !!clear });
@@ -367,6 +387,7 @@ async function pressKey({ key, modifiers, ref, selector, guard, tabId }) {
   if (!key) throw new Error('browser_key needs a key, e.g. "Enter", "Tab", "Escape", "ArrowDown" or "Ctrl+A"');
   const k = parseKey(key, modifiers);
   const id = await resolveTabId(tabId);
+  await showTab(id);
   return withDebugger(id, async (target) => {
     if (ref != null || selector) await pageEval(target, FOCUS_BODY, { ref, selector });
     if (k.key === 'Enter' && guard) {
@@ -447,11 +468,9 @@ async function readText({ tabId }) {
 }
 
 // CDP's Page.captureScreenshot instead of chrome.tabs.captureVisibleTab --
-// captureVisibleTab can only ever capture whichever tab is the *active* tab
-// of its window, which would break this the moment Athena's working tab
-// isn't the one on screen (it's opened non-active, on purpose, so as not to
-// steal the user's focus). Page.captureScreenshot works over the same
-// debugger session already used for click/type/read, active or not.
+// it runs over the same debugger session as every other command and needs
+// no extra permission. showTab puts the tab in front first: a tab that is
+// not on screen often has no fresh frame to capture.
 //
 // The image is scaled to SHOT_SCALE(viewport) image pixels per CSS pixel --
 // device pixel ratio removed, long edge capped at MAX_SHOT_EDGE -- so a
@@ -459,6 +478,7 @@ async function readText({ tabId }) {
 // shrink, and so browser_click_at can map the model's coordinates back exactly.
 async function screenshot({ tabId }) {
   const id = await resolveTabId(tabId);
+  await showTab(id);
   return withDebugger(id, async (target) => {
     const vp = await pageEval(target, 'return viewportInfo();');
     const { data } = await captureWithRetry(target, {
@@ -477,11 +497,11 @@ async function screenshot({ tabId }) {
   });
 }
 
-// A tab that is not on screen only renders when something asks it to, and
-// about half of the captures there wait for a frame that never arrives.
-// Measured in Chromium, headless and headed alike: the attempt right after a
-// stalled one returns a correct, current image. So each attempt gets a short
-// deadline, and a stalled one is simply asked again.
+// Kept as a safety net for when the tab still is not on screen (Chrome
+// itself minimized or covered): about half of the captures there wait for a
+// frame that never arrives. Measured in Chromium, headless and headed alike:
+// the attempt right after a stalled one returns a correct, current image. So
+// each attempt gets a short deadline, and a stalled one is simply asked again.
 async function captureWithRetry(target, params) {
   for (let attempt = 0; attempt < 4; attempt++) {
     const pending = sendCommand(target, 'Page.captureScreenshot', params);
