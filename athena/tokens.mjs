@@ -67,6 +67,10 @@ export function estimateMessages(messages) {
         else if (typeof block.text === 'string') total += estimateTokens(block.text);
       }
     }
+    // Screenshot images (core.mjs splitScreenshot): about width*height/750 tokens each.
+    if (Array.isArray(m.images)) {
+      for (const img of m.images) total += Math.ceil(((img.width || 1280) * (img.height || 800)) / 750);
+    }
     if (m.tool_calls) {
       for (const tc of m.tool_calls) {
         total += estimateTokens(tc.function?.arguments || '');

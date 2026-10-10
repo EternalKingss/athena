@@ -21,6 +21,37 @@ let _interrupted = false;
 let _turnActive   = false;
 
 export function setRequestUserInput(fn) { _requestUserInput = fn; }
+
+// ---- Screenshots as images ----
+// browser_screenshot returns its PNG as a data URL inside JSON. Sent as text, that was
+// cut at compressOutput's 8000-char cap, so the model was handed a broken base64 stub
+// and never actually saw a screenshot. Split it out: the text keeps the metadata, the
+// image rides on the tool message as `images`, which api.mjs turns into an image block.
+// Returns null for anything that is not a usable screenshot result.
+export function splitScreenshot(toolName, result) {
+  if (toolName !== 'browser_screenshot' || typeof result !== 'string' || !result.startsWith('{')) return null;
+  let r;
+  try { r = JSON.parse(result); } catch { return null; }
+  const m = typeof r.dataUrl === 'string' && r.dataUrl.match(/^data:(image\/(?:png|jpeg|webp|gif));base64,(.+)$/);
+  if (!m) return null;
+  const { dataUrl, ...meta } = r;
+  return {
+    text: JSON.stringify({ ...meta, image: 'attached below -- click_at coordinates are pixels in this image' }),
+    image: { media_type: m[1], data: m[2], width: r.width, height: r.height },
+  };
+}
+
+// Each screenshot costs ~1-2k input tokens on every later turn. Keep the newest few
+// and replace older ones with a note, so a long browsing session does not grow the
+// context by an image per step.
+const KEEP_IMAGES = 3;
+export function pruneOldImages(...lists) {
+  const withImages = lists.flat().filter(m => m && Array.isArray(m.images) && m.images.length);
+  for (const m of withImages.slice(0, Math.max(0, withImages.length - (KEEP_IMAGES - 1)))) {
+    delete m.images;
+    m.content = String(m.content) + ' [older screenshot removed to save context]';
+  }
+}
 export function setSessionTodos(t) { SESSION_TODOS = t; }
 // Exported so watcher.mjs can checkpoint real task state. It imported SESSION_TODOS
 // directly, which core.mjs never exported -- so every checkpoint silently wrote [].
@@ -378,8 +409,14 @@ export async function turn(messages, emit, opts = {}) {
         ? String(result) + '\n\n[memory] You recorded this exact call as a dead end previously: ' +
           _deadEnd.replace(/^\[env:[^\]]*\]\s*/, '') + '\nIf it failed the same way again, change approach rather than retrying.'
         : String(result);
-      const compressed = compressOutput(withNote, call.function.name);
-      toolResults.push({ role: 'tool', tool_call_id: call.id, content: compressed });
+      const shot = splitScreenshot(call.function.name, String(result));
+      if (shot) {
+        pruneOldImages(messages, toolResults);
+        toolResults.push({ role: 'tool', tool_call_id: call.id, content: shot.text + withNote.slice(String(result).length), images: [shot.image] });
+      } else {
+        const compressed = compressOutput(withNote, call.function.name);
+        toolResults.push({ role: 'tool', tool_call_id: call.id, content: compressed });
+      }
 
       // Skill success/failure tracking
       if (call.function.name === 'load_skill' && args.name) {
