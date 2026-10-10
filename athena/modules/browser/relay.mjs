@@ -2,12 +2,10 @@
 //
 // Athena talks to the user's actual, already-signed-in Chrome through a
 // small Manifest V3 extension (see extension/), not a spun-off automation
-// profile. The extension reaches this relay via Chrome's Native Messaging
-// API (native_host.mjs is the bridge Chrome spawns) -- this file has no idea
-// whether a native-messaging bridge or a plain HTTP poller is on the other
-// end, and doesn't need to: its only job is holding a queue of commands and
-// matching each one's eventual result back to the promise that's waiting on
-// it, over plain node:http (no npm dependency, and matches the "she carries
+// profile. The extension long-polls this relay over plain HTTP on loopback;
+// this file's only job is holding a queue of commands and matching each
+// one's eventual result back to the promise that's waiting on it, over plain
+// node:http (no npm dependency, and matches the "she carries
 // whatever she needs on her own drive" rule better than depending on any
 // particular transport library being present).
 //
@@ -91,7 +89,7 @@ function handlePoll(req, res, url) {
 
   // Long-poll: hold this response open until submitCommand() wakes it, or
   // until LONG_POLL_MAX_MS passes with nothing queued -- either way the
-  // caller (native_host.mjs) gets a clean { command } response and loops.
+  // caller (the extension) gets a clean { command } response and loops.
   let settled = false;
   const timer = setTimeout(() => {
     if (settled) return;
@@ -107,7 +105,7 @@ function handlePoll(req, res, url) {
   };
   waitingPollers.push(resolve);
   req.on('close', () => {
-    // Caller went away (native host process killed, Chrome closed) --
+    // Caller went away (service worker killed, Chrome closed) --
     // stop holding a resolver that can now never usefully fire.
     if (settled) return;
     settled = true;
@@ -213,8 +211,7 @@ export function isListening() {
   return server !== null;
 }
 
-// True only once the extension (directly, or via native_host.mjs on its
-// behalf) has actually polled recently -- what the browser_status
+// True only once the extension has actually polled recently -- what the browser_status
 // capability reports as measured fact to the model.
 export function isExtensionConnected() {
   return extensionLastSeen !== null && (Date.now() - extensionLastSeen) < EXTENSION_STALE_MS;

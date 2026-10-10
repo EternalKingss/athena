@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "Athena Browser Bridge",
-  "version": "3.4.1",
+  "version": "3.5.0",
   "description": "Lets Athena act inside your real, signed-in Chrome -- not a separate automation profile. Load unpacked, nothing else to set up.",
-  "permissions": ["debugger", "tabs", "alarms"],
+  "permissions": ["debugger", "tabs", "alarms", "storage"],
   "host_permissions": ["http://127.0.0.1/*", "<all_urls>"],
   "background": {
     "service_worker": "background.js"

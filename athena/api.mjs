@@ -151,12 +151,18 @@ function toAnthropicMessages(messages) {
   for (const m of messages) {
     if (m.role === 'system') continue;
     if (m.role === 'tool') {
+      // A screenshot result carries its image separately (core.mjs splitScreenshot);
+      // a tool_result block can hold text and image blocks together.
+      const content = Array.isArray(m.images) && m.images.length
+        ? [{ type: 'text', text: String(m.content) },
+           ...m.images.map(img => ({ type: 'image', source: { type: 'base64', media_type: img.media_type, data: img.data } }))]
+        : String(m.content);
       userMessages.push({
         role: 'user',
         content: [{
           type:        'tool_result',
           tool_use_id: m.tool_call_id,
-          content:     String(m.content),
+          content,
         }],
       });
       continue;
@@ -175,6 +181,16 @@ function toAnthropicMessages(messages) {
     userMessages.push({ role: m.role, content: m.content || '' });
   }
   return userMessages;
+}
+
+// OpenAI-compatible providers get the plain message shape: tool messages there are
+// text-only, so a screenshot's `images` field is dropped (the text still says what it was).
+function toOpenAiMessages(messages) {
+  return messages.map(m => {
+    if (!m || !m.images) return m;
+    const { images, ...rest } = m;
+    return rest;
+  });
 }
 
 function extractSystem(messages) {
@@ -419,7 +435,7 @@ export async function chat(messages, opts = {}) {
         const { res, text } = await timedJson(base + '/chat/completions', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key },
-          body: JSON.stringify({ model, messages }),
+          body: JSON.stringify({ model, messages: toOpenAiMessages(messages) }),
         }, model);
         if (!res.ok) throw mkHttpError(res.status, text, res);
         const data = JSON.parse(text);
@@ -524,7 +540,7 @@ export async function* chatStream(messages, tools, opts = {}) {
 // ---- OpenAI streaming ----
 async function* openaiStream(messages, tools, base, key, model) {
   const res = await withRetry(async () => {
-    const body = { model, messages, stream: true };
+    const body = { model, messages: toOpenAiMessages(messages), stream: true };
     if (tools?.length) { body.tools = tools; body.tool_choice = 'auto'; }
     let r = await timedFetch(base + '/chat/completions', {
       method: 'POST',
@@ -534,7 +550,7 @@ async function* openaiStream(messages, tools, base, key, model) {
     if (!r.ok) {
       const errText = await r.text();
       if (r.status === 400 && /tool|function/i.test(errText)) {
-        const body2 = { model, messages, stream: true };
+        const body2 = { model, messages: toOpenAiMessages(messages), stream: true };
         r = await timedFetch(base + '/chat/completions', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key },

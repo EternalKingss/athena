@@ -19,6 +19,7 @@ import { createRequire } from 'node:module';
 // rest of the built-in tool surface instead of being its own registered kernel module.
 import { runBoundedAgentLoop } from './agent_loop.mjs';
 import { pickLocalModelId } from './local_llm.mjs';
+import { PURCHASE_LIKE } from './kernel/risk_patterns.mjs';
 
 // previewCall is synchronous (the approval gate cannot await), so the fix store is loaded
 // through a sync require rather than a dynamic import.
@@ -591,9 +592,8 @@ export function toolsForModel(model) {
 //
 // Only actions that move money (a purchase, a booking) get this approval gate. Email is
 // moot: modules/google.mjs's OAuth app was never granted gmail.send, so there's no code
-// path that could send one. This is a text-match heuristic on the clicked element and can
-// be wrong in either direction -- a bare "Submit" with no other cue is genuinely ambiguous.
-const PURCHASE_LIKE = /\b(place order|buy now|pay now|book now|confirm (order|purchase|payment|booking)|complete (purchase|order|booking|checkout)|checkout|finalize (order|booking))\b/i;
+// path that could send one. PURCHASE_LIKE itself lives in kernel/risk_patterns.mjs so the
+// browser module can enforce the same pattern on clicks whose arguments carry no text.
 
 const IRREVERSIBLE = [
   { re: /\b(format|mkfs|diskpart)\b/i,                       why: 'formats or repartitions a disk' },
@@ -624,8 +624,8 @@ export function irreversibleReason(name, args) {
   // a purchase/checkout control is exactly as irreversible as anything else in this list
   // once it fires (money moves). Checked here on name rather than folded into IRREVERSIBLE,
   // because the target text lives in args.selector/args.text, not
-  // args.command/content/steps -- see PURCHASE_LIKE's comment above.
-  if (name === 'browser_click') {
+  // args.command/content/steps -- see PURCHASE_LIKE in kernel/risk_patterns.mjs.
+  if (name === 'browser_click' || name === 'browser_click_at') {
     const target = [a.selector, a.text].filter(Boolean).join(' ');
     if (PURCHASE_LIKE.test(target)) return 'clicks a purchase/checkout control ("' + target.slice(0, 60) + '")';
   }
@@ -828,7 +828,7 @@ export function classifyRisk(name, args, machineProfile) {
   if (name === 'workspace_write')
     return { tier: 0, reason: 'in-memory agent workspace' };
 
-  if (name === 'browser_click') {
+  if (name === 'browser_click' || name === 'browser_click_at') {
     const target = [args && args.selector, args && args.text].filter(Boolean).join(' ');
     if (PURCHASE_LIKE.test(target))
       return { tier: 2, reason: 'clicks a purchase/checkout control -- confirm before this goes out' };

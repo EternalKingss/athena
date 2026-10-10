@@ -142,7 +142,7 @@ t('module 1 and module 2 never import each other (static import-graph check)',
   noCrossImports, JSON.stringify({ systemImports, browserImports, relayImports }));
 
 const browserMod = kernel.listModules().find(m => m.name === 'browser');
-t('module 2 (browser) registers all 7 capabilities', browserMod?.capabilities.length === 7, browserMod?.capabilities.length);
+t('module 2 (browser) registers all 12 capabilities', browserMod?.capabilities.length === 12, browserMod?.capabilities.length);
 t('module 2 healthy after boot (relay listening)', kernel.isHealthy('browser') === true);
 
 const { toolsForModel } = await import('./athena/kernel/toolSurface.mjs');
@@ -152,14 +152,14 @@ const googleUp = kernel.isHealthy('google') === true;
 const G = googleUp ? 6 : 0, GL = googleUp ? 3 : 0;
 if (!googleUp) skip('Google capabilities in the tool surface', 'Google OAuth not configured in config/.env');
 t('kernel tool surface merges module 2 capabilities for cloud models',
-  cloudNames.length === 44 + G && cloudNames.includes('browser_navigate') && cloudNames.includes('browser_screenshot') && cloudNames.includes('delegate_to_local') && !cloudNames.includes('read_applicant_profile'),
+  cloudNames.length === 49 + G && cloudNames.includes('browser_navigate') && cloudNames.includes('browser_snapshot') && cloudNames.includes('browser_click_at') && cloudNames.includes('browser_screenshot') && cloudNames.includes('delegate_to_local') && !cloudNames.includes('read_applicant_profile'),
   cloudNames.length);
 if (googleUp) t('kernel tool surface merges module 3 (google) capabilities for cloud models',
   cloudNames.includes('email_list') && cloudNames.includes('email_draft') && cloudNames.includes('calendar_create_event'),
   cloudNames.length);
 const localToolNames = toolsForModel('local-qwen2-5-3b-instruct-q4-k-m').map(x => x.function.name);
 t('kernel tool surface respects localOk:false for local models',
-  localToolNames.length === 11 + GL && localToolNames.includes('browser_navigate') && !localToolNames.includes('browser_screenshot') && !localToolNames.includes('delegate_to_local') && !localToolNames.includes('read_applicant_profile'),
+  localToolNames.length === 11 + GL && localToolNames.includes('browser_navigate') && !localToolNames.includes('browser_screenshot') && !localToolNames.includes('browser_snapshot') && !localToolNames.includes('browser_click_at') && !localToolNames.includes('delegate_to_local') && !localToolNames.includes('read_applicant_profile'),
   localToolNames.length);
 if (googleUp) t('kernel tool surface keeps google writes cloud-only for local models',
   localToolNames.includes('email_list') && localToolNames.includes('calendar_list') && !localToolNames.includes('email_draft') && !localToolNames.includes('calendar_create_event') && !localToolNames.includes('calendar_update_event'),
@@ -185,6 +185,53 @@ let navParsed = null;
 try { navParsed = JSON.parse(navResult); } catch {}
 t("dispatch resolves with the simulated extension's reported result",
   navParsed?.navigated === 'https://example.com', navResult);
+
+// ---- v3.5: trusted input, snapshot refs, purchase guard, screenshots as images ----
+// A click by ref, coordinates or an opaque selector carries no text for classifyRisk to
+// read, so the module hands the extension the purchase pattern to check against the real
+// element. It must not be sent when the gate already saw purchase-like text (the user was
+// asked), and the model must never be able to set or clear it itself.
+const { PURCHASE_LIKE } = await import('./athena/kernel/risk_patterns.mjs');
+const { withPurchaseGuard } = await import('./athena/modules/browser.mjs');
+t('purchase guard rides on ref / coordinate / opaque-selector clicks and on Enter',
+  withPurchaseGuard('browser_click', { ref: 7 }).guard === PURCHASE_LIKE.source &&
+  withPurchaseGuard('browser_click_at', { x: 10, y: 20 }).guard === PURCHASE_LIKE.source &&
+  withPurchaseGuard('browser_click', { selector: '#btn-7' }).guard === PURCHASE_LIKE.source &&
+  withPurchaseGuard('browser_key', { key: 'Enter' }).guard === PURCHASE_LIKE.source);
+t('purchase guard is skipped once the approval gate saw the purchase text, and never on non-clicks',
+  withPurchaseGuard('browser_click', { ref: 7, text: 'Place order' }).guard === undefined &&
+  withPurchaseGuard('browser_navigate', { url: 'https://example.com' }).guard === undefined &&
+  withPurchaseGuard('browser_type', { ref: 3, text: 'hello' }).guard === undefined);
+t('browser_click_at with purchase-like text is tier 2 and irreversible; ordinary is tier 1',
+  classifyRisk('browser_click_at', { x: 1, y: 2, text: 'Buy Now' }).tier === 2 &&
+  irreversibleReason('browser_click_at', { x: 1, y: 2, text: 'Complete Purchase' }) !== null &&
+  classifyRisk('browser_click_at', { x: 1, y: 2 }).tier === 1);
+const refClick = kernel.dispatch('browser_click', { ref: 4, guard: '' }, { preApproved: true });
+await new Promise(r => setTimeout(r, 50));
+const refPolled = await fetch(relayBase + '/poll').then(r => r.json());
+t('a model-supplied guard is replaced: the extension always gets the real pattern',
+  refPolled.command?.action === 'browser_click' && refPolled.command?.args?.ref === 4 &&
+  refPolled.command?.args?.guard === PURCHASE_LIKE.source, JSON.stringify(refPolled.command?.args));
+await fetch(relayBase + '/result', {
+  method: 'POST', headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ id: refPolled.command.id, ok: false, error: 'refused: "Place order" looks like a purchase/checkout control.' }),
+});
+const refResult = await refClick;
+t('an extension refusal reaches the model as an error', /^Error: .*refused: "Place order"/.test(refResult), refResult);
+
+// Screenshots used to reach the model as text, cut at compressOutput's 8000-char cap --
+// a broken base64 stub. They now travel as an image block next to the metadata.
+const { splitScreenshot, pruneOldImages } = await import('./athena/core.mjs');
+const fakePng = 'iVBORw0KGgo' + 'A'.repeat(20000);
+const shot = splitScreenshot('browser_screenshot', JSON.stringify({ dataUrl: 'data:image/png;base64,' + fakePng, width: 1280, height: 720, url: 'https://example.com' }));
+t('a screenshot result is split into metadata text and an intact image',
+  shot && shot.image.data === fakePng && shot.image.media_type === 'image/png' &&
+  !shot.text.includes('base64') && JSON.parse(shot.text).width === 1280 &&
+  splitScreenshot('browser_read_text', '{"text":"x"}') === null && splitScreenshot('browser_screenshot', 'Error: no tab') === null);
+const hist = [1, 2, 3, 4].map(i => ({ role: 'tool', content: 'shot ' + i, images: [{ media_type: 'image/png', data: 'x' }] }));
+pruneOldImages(hist);
+t('only the newest screenshots stay in context (room left for the one being added)',
+  hist.filter(m => m.images).length === 2 && !hist[0].images && /older screenshot removed/.test(hist[0].content) && hist[3].images);
 
 // ---- Module 2 (browser) extension: syntax check ----
 // Native messaging was tried and reverted -- it needs a per-machine

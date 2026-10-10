@@ -5,6 +5,7 @@
 // v3.3: network triage (net_triage.mjs) restores the cloud link on its own; API calls can no longer hang the turn.
 // v3.4: offline = network recovery only. No local-model fallback when the network is down; the reply is the network report.
 // v3.4.1: review fixes -- approval enforced everywhere, relay locked to the extension, shell mutators gated.
+// v3.5: browser engine -- trusted CDP input, snapshot refs, screenshots the model can see, purchase guard on every click path.
 // Zero npm dependencies -- only Node built-ins.
 
 import * as readline from 'node:readline/promises';
