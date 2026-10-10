@@ -219,6 +219,23 @@ await fetch(relayBase + '/result', {
 const refResult = await refClick;
 t('an extension refusal reaches the model as an error', /^Error: .*refused: "Place order"/.test(refResult), refResult);
 
+// The local model sees only the newest message. A follow-up while Claude is mid-task
+// ("just open a normal tab") must stay with Claude; a fresh basic command may go local.
+const { isFollowUpToClaudeTask } = await import('./athena/task_router.mjs');
+const midTask = [
+  { role: 'user', content: 'play my liked songs' },
+  { role: 'assistant', content: '', tool_calls: [{ id: 'a', function: { name: 'browser_click', arguments: '{}' } }] },
+  { role: 'tool', tool_call_id: 'a', content: 'ok' },
+  { role: 'assistant', content: 'Queued it.' },
+  { role: 'user', content: 'go just open normal tab' },
+];
+const afterChat = [
+  { role: 'user', content: 'hi' }, { role: 'assistant', content: 'hello' },
+  { role: 'user', content: 'open a new tab' },
+];
+t('a follow-up to a Claude tool task is never routed to the local model; a fresh command can be',
+  isFollowUpToClaudeTask(midTask) === true && isFollowUpToClaudeTask(afterChat) === false && isFollowUpToClaudeTask([]) === false);
+
 // Screenshots used to reach the model as text, cut at compressOutput's 8000-char cap --
 // a broken base64 stub. They now travel as an image block next to the metadata.
 const { splitScreenshot, pruneOldImages } = await import('./athena/core.mjs');

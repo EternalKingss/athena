@@ -29,7 +29,7 @@ const REF = { type: 'number', description: 'Element ref from the latest browser_
 const CAP_DEFS = [
   {
     name: 'browser_navigate',
-    description: 'Navigate a browser tab to a URL, in the user\'s real signed-in Chrome. Omit tabId to open (or reuse) Athena\'s own dedicated working tab -- this never touches or steals the user\'s actual active tab. Pass an explicit tabId (e.g. one returned by browser_list_tabs) to navigate a specific existing tab instead. Follow with browser_wait, then browser_snapshot to see what is on the page.',
+    description: 'Navigate a browser tab to a URL, in the user\'s real signed-in Chrome. Omit tabId to open (or reuse) Athena\'s own working tab, a normal tab that comes to the front so pages load, render and play media like any tab the user opened. It never navigates one of the user\'s own tabs unless you pass that tabId (e.g. from browser_list_tabs). Follow with browser_wait, then browser_snapshot to see what is on the page.',
     parameters: {
       type: 'object',
       properties: { url: { type: 'string' }, tabId: { type: 'number', description: 'Optional. Leave this out entirely to get a new (or Athena\'s existing working) tab -- never pass -1 or any other placeholder value to mean "new tab". Pass a real tabId from browser_list_tabs only when you want to navigate a specific existing tab.' } },

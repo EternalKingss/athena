@@ -6,6 +6,7 @@
 // v3.4: offline = network recovery only. No local-model fallback when the network is down; the reply is the network report.
 // v3.4.1: review fixes -- approval enforced everywhere, relay locked to the extension, shell mutators gated.
 // v3.5: browser engine -- trusted CDP input, snapshot refs, screenshots the model can see, purchase guard on every click path.
+// v3.5.1: working tab is a normal front tab (hidden windows broke clicks and media); mid-task follow-ups stay with Claude.
 // Zero npm dependencies -- only Node built-ins.
 
 import * as readline from 'node:readline/promises';
